@@ -1,27 +1,24 @@
 import { useState } from "react";
-import WelcomePage from "./components/WelcomePage";
-import QRCodeBlock from "./components/QRCodeBlock";
-import ChatPage from "./components/ChatPage";
+import WelcomePage         from "./components/WelcomePage";
+import QRCodeBlock         from "./components/QRCodeBlock";
+import AnswerQRCodeBlock   from "./components/AnswerQRCodeBlock";
+import ChatPage            from "./components/ChatPage";
 
-export type AppMode = "welcome" | "qr" | "chat";
+type Mode = "welcome" | "offer" | "answer" | "chat";
 
 export default function App() {
-  const [mode, setMode] = useState<AppMode>("welcome");
+  const [mode,  setMode ] = useState<Mode>("welcome");
+  const [answer,setAnswer] = useState<string>("");
 
   return (
     <main className="container">
-      {mode === "welcome" && (
-        <WelcomePage
-          onShowQR={() => setMode("qr")}
-          onConnected={() => setMode("chat")}
-        />
-      )}
-
-      {mode === "qr" && (
-        <QRCodeBlock onBack={() => setMode("welcome")} />
-      )}
-
-      {mode === "chat" && <ChatPage onDisconnect={() => setMode("welcome")} />}
+      {mode==="welcome" && <WelcomePage
+                              onShowOffer={()=>setMode("offer")}
+                              showAnswerQR={ans=>{setAnswer(ans);setMode("answer");}}
+                          />}
+      {mode==="offer"   && <QRCodeBlock  onBack={()=>setMode("welcome")}/>}
+      {mode==="answer"  && <AnswerQRCodeBlock answer={answer} onBack={()=>setMode("chat")}/>}
+      {mode==="chat"    && <ChatPage onDisconnect={()=>setMode("welcome")}/>}
     </main>
   );
 }

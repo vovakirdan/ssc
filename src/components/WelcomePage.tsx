@@ -1,52 +1,26 @@
 import { QrCode } from "lucide-react";
-import ScanButton from "./ScanButton";
+import ScanButton     from "./ScanButton";
 import UploadQRButton from "./UploadQRButton";
 
 type Props = {
-  onShowQR: () => void;
-  onConnected: () => void;   // <- новый проп
+  onShowOffer: () => void;
+  showAnswerQR: (answer:string) => void;
 };
 
-export default function WelcomePage({ onShowQR, onConnected }: Props) {
+export default function WelcomePage({ onShowOffer, showAnswerQR }: Props) {
   return (
-    <div style={{ textAlign: "center", marginTop: 48 }}>
-      <h1 style={{ fontWeight: 700 }}>Super Secret Chat</h1>
-      <p>
-        Welcome! <br />
-        Start a secret P2P chat without any servers.
-      </p>
+    <div style={{textAlign:"center",marginTop:48}}>
+      <h1 style={{fontWeight:700}}>Super Secret Chat</h1>
+      <p>Generate offer — или примите чужой offer, сгенерируйте answer и покажите его отправителю.</p>
 
-      {/* кнопки */}
-      <div
-        style={{
-          marginTop: 32,
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-          gap: 18,
-        }}
-      >
-        <button
-          onClick={onShowQR}
-          className="main-btn"
-          style={{
-            fontSize: 22,
-            padding: "12px 32px",
-            display: "flex",
-            alignItems: "center",
-            gap: 10,
-            width: 280,
-            justifyContent: "center",
-          }}
-        >
-          <QrCode size={26} /> Generate QR for Connection
+      <div style={{marginTop:32,display:"flex",flexDirection:"column",gap:18,alignItems:"center"}}>
+        <button className="main-btn" style={{fontSize:22,padding:"12px 32px",display:"flex",gap:10}}
+                onClick={onShowOffer}>
+          <QrCode size={26}/> Generate Offer
         </button>
 
-        {/* сканирование с камеры */}
-        <ScanButton onConnected={onConnected} />
-
-        {/* альтернатива — загрузка файла */}
-        <UploadQRButton onConnected={onConnected} />
+        <ScanButton     onAnswerReady={showAnswerQR}/>
+        <UploadQRButton onAnswerReady={showAnswerQR}/>
       </div>
     </div>
   );
