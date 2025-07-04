@@ -17,6 +17,8 @@ export default function QRCodeBlock({ onBack }: Props) {
   // Генерация QR
   const generateOffer = useCallback(async () => {
     const result = await invoke<string>("generate_offer", {});
+    console.log("Generated QR data length:", result.length);
+    console.log("QR data preview:", result.substring(0, 100) + "...");
     setOffer(result);
     setSeconds(QR_TTL);
   }, []);
@@ -35,8 +37,8 @@ export default function QRCodeBlock({ onBack }: Props) {
       const ctx = canvas.getContext("2d");
       const img = new Image();
 
-      canvas.width = 480;
-      canvas.height = 480;
+      canvas.width = 360;
+      canvas.height = 360;
 
       img.onload = () => {
         if (ctx) {

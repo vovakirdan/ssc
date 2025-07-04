@@ -1,6 +1,5 @@
 use tauri::command;
 use crate::webrtc_peer;
-use tauri::AppHandle;
 
 #[command]
 pub async fn generate_offer() -> String {
@@ -8,8 +7,8 @@ pub async fn generate_offer() -> String {
 }
 
 #[command]
-pub async fn accept_offer_and_create_answer(encoded: String, app: AppHandle) -> String {
-    webrtc_peer::accept_offer_and_create_answer(encoded, app).await
+pub async fn accept_offer_and_create_answer(encoded: String) -> String {
+    webrtc_peer::accept_offer_and_create_answer(encoded).await
 }
 
 #[command]

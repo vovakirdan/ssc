@@ -11,12 +11,17 @@ export default function ScanButton({ onConnected }: Props) {
   const [showScan, setShowScan] = useState(false);
 
   async function handleScanResult(data: string) {
+    console.log("QR scanned, data length:", data.length);
+    console.log("QR data preview:", data.substring(0, 50) + "...");
+    
     try {
       // Создаем answer для полученного offer
       const answer = await invoke<string>("accept_offer_and_create_answer", { encoded: data });
+      console.log("Answer created, length:", answer.length);
       
       // Устанавливаем answer для завершения соединения
       const success = await invoke<boolean>("set_answer", { encoded: answer });
+      console.log("Connection result:", success);
       
       if (success) {
         onConnected();

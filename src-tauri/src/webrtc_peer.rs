@@ -13,7 +13,6 @@ use webrtc::{
 use base64::{engine::general_purpose, Engine as _};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter};
 
 /// ========  GLOBALS  =========
 pub static PEER: Lazy<Mutex<Option<Arc<RTCPeerConnection>>>> =
@@ -42,10 +41,27 @@ fn rtc_config() -> RTCConfiguration {
     }
 }
 
-async fn new_peer(app: AppHandle) -> Arc<RTCPeerConnection> {
+fn random_id() -> String {
+    let mut rng = rand::rng();
+    hex::encode(rng.random::<[u8; 8]>())
+}
+
+fn encode_payload(p: &SdpPayload) -> String {
+    general_purpose::STANDARD.encode(serde_json::to_string(p).unwrap())
+}
+
+fn decode_payload(s: &str) -> SdpPayload {
+    serde_json::from_slice(&general_purpose::STANDARD.decode(s).unwrap()).unwrap()
+}
+
+/// ========  PUBLIC API =========
+
+/// Шаг 1 (A): генерируем OFFER, кодируем base64 → QR
+pub async fn generate_offer() -> String {
     let api = APIBuilder::new().build();
     let pc = Arc::new(api.new_peer_connection(rtc_config()).await.unwrap());
 
+    // Создаем data channel
     let dc = pc
         .create_data_channel("ssc-data", Some(RTCDataChannelInit::default()))
         .await
@@ -56,59 +72,44 @@ async fn new_peer(app: AppHandle) -> Arc<RTCPeerConnection> {
         *dlock = Some(dc.clone());
     }
 
-    dc.on_message(Box::new(move |msg| {
-        let app = app.clone();
-        tauri::async_runtime::spawn(async move {
-            app.emit("ssc-msg", String::from_utf8_lossy(&msg.data).to_string())
-                .ok();
-        });
-        Box::pin(async {})
-    }));
-
-    pc
-}
-
-async fn wait_gathering_complete(pc: &RTCPeerConnection) {
-    let mut done = pc.gathering_complete_promise().await;
-    done.recv().await;
-}
-
-fn random_id() -> String {
-    let mut rng = rand::rng();
-    hex::encode(rng.random::<[u8; 8]>())
-
-}
-fn encode_payload(p: &SdpPayload) -> String {
-    general_purpose::STANDARD.encode(serde_json::to_string(p).unwrap())
-}
-fn decode_payload(s: &str) -> SdpPayload {
-    serde_json::from_slice(&general_purpose::STANDARD.decode(s).unwrap()).unwrap()
-}
-
-/// ========  PUBLIC API =========
-
-pub async fn generate_offer() -> String {
-    let api = APIBuilder::new().build();
-    let pc = Arc::new(api.new_peer_connection(rtc_config()).await.unwrap());
     {
         let mut lock = PEER.lock().unwrap();
         *lock = Some(pc.clone());
     }
     let offer = pc.create_offer(None).await.unwrap();
     pc.set_local_description(offer).await.unwrap();
-    wait_gathering_complete(&pc).await;
+    // НЕ ждем gathering complete для QR - это сделает его слишком большим
 
     let payload = SdpPayload {
         sdp: pc.local_description().await.unwrap(),
         id: random_id(),
         ts: chrono::Utc::now().timestamp(),
     };
-    encode_payload(&payload)
+    let result = encode_payload(&payload);
+    println!("[RUST] Generated offer, encoded length: {}", result.len());
+    result
 }
 
-pub async fn accept_offer_and_create_answer(encoded: String, app: AppHandle) -> String {
+/// Шаг 2 (B): приняли OFFER (encoded), создаём ANSWER
+pub async fn accept_offer_and_create_answer(encoded: String) -> String {
+    println!("[RUST] accept_offer_and_create_answer called, encoded length: {}", encoded.len());
     let offer: SdpPayload = decode_payload(&encoded);
-    let pc = new_peer(app).await;
+    println!("[RUST] Decoded offer, session id: {}", offer.id);
+    
+    let api = APIBuilder::new().build();
+    let pc = Arc::new(api.new_peer_connection(rtc_config()).await.unwrap());
+
+    // Создаем data channel
+    let dc = pc
+        .create_data_channel("ssc-data", Some(RTCDataChannelInit::default()))
+        .await
+        .unwrap();
+
+    {
+        let mut dlock = DATA_CH.lock().unwrap();
+        *dlock = Some(dc.clone());
+    }
+
     {
         let mut lock = PEER.lock().unwrap();
         *lock = Some(pc.clone());
@@ -116,22 +117,31 @@ pub async fn accept_offer_and_create_answer(encoded: String, app: AppHandle) -> 
     pc.set_remote_description(offer.sdp).await.unwrap();
     let answer = pc.create_answer(None).await.unwrap();
     pc.set_local_description(answer).await.unwrap();
-    wait_gathering_complete(&pc).await;
+    // НЕ ждем gathering complete - это может вызвать проблемы
 
     let payload = SdpPayload {
         sdp: pc.local_description().await.unwrap(),
         id: offer.id,
         ts: chrono::Utc::now().timestamp(),
     };
-    encode_payload(&payload)
+    let result = encode_payload(&payload);
+    println!("[RUST] Created answer, encoded length: {}", result.len());
+    result
 }
 
+/// Шаг 3 (A): получаем ANSWER, завершаем соединение
 pub async fn set_answer(encoded: String) -> bool {
+    println!("[RUST] set_answer called, encoded length: {}", encoded.len());
     let answer: SdpPayload = decode_payload(&encoded);
+    println!("[RUST] Decoded answer, session id: {}", answer.id);
+    
     let pc = { PEER.lock().unwrap().as_ref().cloned() };
     if let Some(pc) = pc {
-        pc.set_remote_description(answer.sdp).await.is_ok()
+        let result = pc.set_remote_description(answer.sdp).await.is_ok();
+        println!("[RUST] set_remote_description result: {}", result);
+        result
     } else {
+        println!("[RUST] No peer connection found");
         false
     }
 }

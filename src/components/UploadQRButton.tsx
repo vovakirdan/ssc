@@ -14,21 +14,56 @@ export default function UploadQRButton({ onConnected }: Props) {
     const file = e.target.files?.[0];
     if (!file) return;
 
+    console.log("File selected:", file.name, "Size:", file.size, "Type:", file.type);
+
     const reader = new FileReader();
     reader.onload = async ev => {
       const url = ev.target?.result as string;
+      console.log("File loaded as data URL, length:", url.length);
+      
       try {
         const qr = new QrcodeDecoder();
+        console.log("QrcodeDecoder created");
+        
         const result = await qr.decodeFromImage(url);
-        if (result) {
-          const ok = await invoke<boolean>("accept_answer", { encoded: result.data });
-          if (ok) onConnected();
-          else alert("Invalid or expired QR-code.");
+        console.log("QR decode result:", result);
+        
+        if (result && result.data) {
+          console.log("QR data found:", result.data.substring(0, 50) + "...");
+          
+          try {
+            // Создаем answer для полученного offer
+            const answer = await invoke<string>("accept_offer_and_create_answer", { encoded: result.data });
+            console.log("Answer created, length:", answer.length);
+            
+            // Устанавливаем answer для завершения соединения
+            const success = await invoke<boolean>("set_answer", { encoded: answer });
+            console.log("Connection result:", success);
+            
+            if (success) {
+              onConnected();
+            } else {
+              alert("Failed to establish connection. Please try again.");
+            }
+          } catch (error) {
+            console.error("Connection error:", error);
+            alert("Invalid or expired QR-code. Please try again.");
+          }
+        } else {
+          console.log("No QR data found in result");
+          alert("Could not recognize a QR-code in the image.");
         }
-      } catch {
+      } catch (error) {
+        console.error("QR decode error:", error);
         alert("Could not recognize a QR-code in the image.");
       }
     };
+    
+    reader.onerror = (error) => {
+      console.error("FileReader error:", error);
+      alert("Error reading file.");
+    };
+    
     reader.readAsDataURL(file);
     if (inputRef.current) inputRef.current.value = "";
   }
