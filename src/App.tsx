@@ -1,19 +1,27 @@
 import { useState } from "react";
 import WelcomePage from "./components/WelcomePage";
 import QRCodeBlock from "./components/QRCodeBlock";
+import ChatPage from "./components/ChatPage";
 
-function App() {
-  const [showQR, setShowQR] = useState(false);
+export type AppMode = "welcome" | "qr" | "chat";
+
+export default function App() {
+  const [mode, setMode] = useState<AppMode>("welcome");
 
   return (
     <main className="container">
-      {!showQR ? (
-        <WelcomePage onShowQR={() => setShowQR(true)} />
-      ) : (
-        <QRCodeBlock onBack={() => setShowQR(false)} />
+      {mode === "welcome" && (
+        <WelcomePage
+          onShowQR={() => setMode("qr")}
+          onConnected={() => setMode("chat")}
+        />
       )}
+
+      {mode === "qr" && (
+        <QRCodeBlock onBack={() => setMode("welcome")} />
+      )}
+
+      {mode === "chat" && <ChatPage onDisconnect={() => setMode("welcome")} />}
     </main>
   );
 }
-
-export default App;

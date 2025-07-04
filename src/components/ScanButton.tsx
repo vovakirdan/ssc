@@ -1,9 +1,20 @@
 import { useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { Camera } from "lucide-react";
 import QRScanModal from "./ScanQRModal";
 
-export default function ScanButton() {
+type Props = {
+  onConnected: () => void;
+};
+
+export default function ScanButton({ onConnected }: Props) {
   const [showScan, setShowScan] = useState(false);
+
+  async function handleScanResult(data: string) {
+    const ok = await invoke<boolean>("accept_answer", { encoded: data });
+    if (ok) onConnected();
+    else alert("Invalid or expired QR-code.");
+  }
 
   return (
     <>
@@ -15,18 +26,18 @@ export default function ScanButton() {
           display: "flex",
           alignItems: "center",
           gap: 10,
+          width: 280,
+          justifyContent: "center",
         }}
         onClick={() => setShowScan(true)}
       >
         <Camera size={22} />
         Scan QR
       </button>
+
       {showScan && (
         <QRScanModal
-          onScan={(data) => {
-            alert("Scanned QR:\n" + data);
-            // Можно здесь вызвать переход в окно подтверждения соединения
-          }}
+          onScan={handleScanResult}
           onClose={() => setShowScan(false)}
         />
       )}

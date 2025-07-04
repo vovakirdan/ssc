@@ -1,12 +1,13 @@
 import { QrCode } from "lucide-react";
 import ScanButton from "./ScanButton";
-import UploadQRButton from "./UploadQRButton"; // Новый компонент
+import UploadQRButton from "./UploadQRButton";
 
 type Props = {
   onShowQR: () => void;
+  onConnected: () => void;   // <- новый проп
 };
 
-export default function WelcomePage({ onShowQR }: Props) {
+export default function WelcomePage({ onShowQR, onConnected }: Props) {
   return (
     <div style={{ textAlign: "center", marginTop: 48 }}>
       <h1 style={{ fontWeight: 700 }}>Super Secret Chat</h1>
@@ -14,9 +15,11 @@ export default function WelcomePage({ onShowQR }: Props) {
         Welcome! <br />
         Start a secret P2P chat without any servers.
       </p>
+
+      {/* кнопки */}
       <div
         style={{
-          margin: "32px 0",
+          marginTop: 32,
           display: "flex",
           flexDirection: "column",
           alignItems: "center",
@@ -38,8 +41,12 @@ export default function WelcomePage({ onShowQR }: Props) {
         >
           <QrCode size={26} /> Generate QR for Connection
         </button>
-        <ScanButton />
-        <UploadQRButton />
+
+        {/* сканирование с камеры */}
+        <ScanButton onConnected={onConnected} />
+
+        {/* альтернатива — загрузка файла */}
+        <UploadQRButton onConnected={onConnected} />
       </div>
     </div>
   );

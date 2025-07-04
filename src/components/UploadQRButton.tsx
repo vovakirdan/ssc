@@ -1,30 +1,35 @@
 import { useRef } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { ImageUp } from "lucide-react";
 import QrcodeDecoder from "qrcode-decoder";
 
-export default function UploadQRButton() {
+type Props = {
+  onConnected: () => void;
+};
+
+export default function UploadQRButton({ onConnected }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
 
   async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
+
     const reader = new FileReader();
-    reader.onload = async function (event) {
-      const url = event.target?.result as string;
-      if (!url) return;
-      const qr = new QrcodeDecoder();
+    reader.onload = async ev => {
+      const url = ev.target?.result as string;
       try {
+        const qr = new QrcodeDecoder();
         const result = await qr.decodeFromImage(url);
         if (result) {
-          alert("Scanned QR from file:\n" + result.data);
+          const ok = await invoke<boolean>("accept_answer", { encoded: result.data });
+          if (ok) onConnected();
+          else alert("Invalid or expired QR-code.");
         }
-        // Можно интегрировать дальше по логике чата
-      } catch (err) {
-        alert("Could not recognize QR code in image.");
+      } catch {
+        alert("Could not recognize a QR-code in the image.");
       }
     };
     reader.readAsDataURL(file);
-    // Сброс input, чтобы повторная загрузка работала
     if (inputRef.current) inputRef.current.value = "";
   }
 
@@ -43,9 +48,9 @@ export default function UploadQRButton() {
         }}
         onClick={() => inputRef.current?.click()}
       >
-        <ImageUp size={22} />
-        Upload QR from file
+        <ImageUp size={22} /> Upload QR from file
       </button>
+
       <input
         ref={inputRef}
         type="file"
