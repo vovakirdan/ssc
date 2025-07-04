@@ -1,4 +1,5 @@
 mod signaling;
+mod session;
 
 #[tauri::command]
 fn greet(name: &str) -> String {
@@ -11,6 +12,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             signaling::generate_offer,
+            signaling::accept_answer,
             greet
         ])
         .run(tauri::generate_context!())
