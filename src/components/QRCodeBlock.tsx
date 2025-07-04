@@ -7,7 +7,7 @@ type Props = {
   onBack: () => void;
 };
 
-const QR_TTL = 60;
+const QR_TTL = 6000;
 
 export default function QRCodeBlock({ onBack }: Props) {
   const [offer, setOffer] = useState<string | null>(null);
