@@ -7,6 +7,13 @@
   font-weight: 600;
   transition: 0.14s;
   cursor: pointer;
+  margin: 0 0 0 0;
+  min-width: 220px;
+  min-height: 44px;
+  outline: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 .main-btn:hover {
   background: #2c3141;
