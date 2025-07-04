@@ -87,8 +87,9 @@ fn decode_payload(s: &str) -> SdpPayload {
 
 /// ========  PUBLIC API =========
 
-pub async fn generate_offer(app: AppHandle) -> String {
-    let pc = new_peer(app).await;
+pub async fn generate_offer() -> String {
+    let api = APIBuilder::new().build();
+    let pc = Arc::new(api.new_peer_connection(rtc_config()).await.unwrap());
     {
         let mut lock = PEER.lock().unwrap();
         *lock = Some(pc.clone());

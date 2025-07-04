@@ -35,8 +35,8 @@ export default function QRCodeBlock({ onBack }: Props) {
       const ctx = canvas.getContext("2d");
       const img = new Image();
 
-      canvas.width = 480360;
-      canvas.height = 480360;
+      canvas.width = 480;
+      canvas.height = 480;
 
       img.onload = () => {
         if (ctx) {

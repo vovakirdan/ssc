@@ -11,9 +11,22 @@ export default function ScanButton({ onConnected }: Props) {
   const [showScan, setShowScan] = useState(false);
 
   async function handleScanResult(data: string) {
-    const ok = await invoke<boolean>("accept_answer", { encoded: data });
-    if (ok) onConnected();
-    else alert("Invalid or expired QR-code.");
+    try {
+      // Создаем answer для полученного offer
+      const answer = await invoke<string>("accept_offer_and_create_answer", { encoded: data });
+      
+      // Устанавливаем answer для завершения соединения
+      const success = await invoke<boolean>("set_answer", { encoded: answer });
+      
+      if (success) {
+        onConnected();
+      } else {
+        alert("Failed to establish connection. Please try again.");
+      }
+    } catch (error) {
+      console.error("Connection error:", error);
+      alert("Invalid or expired QR-code. Please try again.");
+    }
   }
 
   return (

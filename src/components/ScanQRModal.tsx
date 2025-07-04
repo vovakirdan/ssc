@@ -56,7 +56,11 @@ export default function QRScanModal({ onScan, onClose }: Props) {
           style={{ width: "100%", height: "100%" }}
           onError={handleError}
           onResult={handleScan}
-          constraints={{ facingMode: "environment" }}
+          constraints={{
+            facingMode: "environment",
+            width: { ideal: 1280 },
+            height: { ideal: 720 }
+          }}
         />
       </div>
       {error && (

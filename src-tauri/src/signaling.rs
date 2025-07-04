@@ -3,8 +3,8 @@ use crate::webrtc_peer;
 use tauri::AppHandle;
 
 #[command]
-pub async fn generate_offer(app: AppHandle) -> String {
-    webrtc_peer::generate_offer(app).await
+pub async fn generate_offer() -> String {
+    webrtc_peer::generate_offer().await
 }
 
 #[command]
