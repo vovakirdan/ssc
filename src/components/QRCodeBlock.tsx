@@ -35,8 +35,8 @@ export default function QRCodeBlock({ onBack }: Props) {
       const ctx = canvas.getContext("2d");
       const img = new Image();
 
-      canvas.width = 240;
-      canvas.height = 240;
+      canvas.width = 480360;
+      canvas.height = 480360;
 
       img.onload = () => {
         if (ctx) {
@@ -112,7 +112,7 @@ export default function QRCodeBlock({ onBack }: Props) {
       <p>Scan this QR within <b>{seconds}s</b></p>
       {offer && (
         <div style={{ position: "relative", display: "inline-block" }}>
-          <QRCodeSVG ref={qrRef} value={offer} size={240} />
+          <QRCodeSVG ref={qrRef} value={offer} size={360} />
         </div>
       )}
       <div style={{ margin: "20px 0" }}>
