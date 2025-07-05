@@ -12,13 +12,15 @@ export default function App() {
 
   return (
     <main className="container">
-      {mode==="welcome" && <WelcomePage
-                              onShowOffer={()=>setMode("offer")}
-                              showAnswerQR={ans=>{setAnswer(ans);setMode("answer");}}
-                          />}
-      {mode==="offer"   && <QRCodeBlock  onBack={()=>setMode("welcome")}/>}
-      {mode==="answer"  && <AnswerQRCodeBlock answer={answer} onBack={()=>setMode("chat")}/>}
-      {mode==="chat"    && <ChatPage onDisconnect={()=>setMode("welcome")}/>}
+      {mode==="welcome" && (
+        <WelcomePage
+          onShowOffer={()=>setMode("offer")}
+          showAnswerQR={ans=>{setAnswer(ans);setMode("answer");}}
+        />
+      )}
+      {mode==="offer"  && <QRCodeBlock        onBack={()=>setMode("welcome")}/>}
+      {mode==="answer" && <AnswerQRCodeBlock  answer={answer} onBack={()=>setMode("welcome")}/>}
+      {mode==="chat"   && <ChatPage           onDisconnect={()=>setMode("welcome")}/>}
     </main>
   );
 }
