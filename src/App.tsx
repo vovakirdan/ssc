@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { listen } from "@tauri-apps/api/event"
 import WelcomePage         from "./components/WelcomePage";
 import QRCodeBlock         from "./components/QRCodeBlock";
 import AnswerQRCodeBlock   from "./components/AnswerQRCodeBlock";
@@ -9,6 +10,11 @@ type Mode = "welcome" | "offer" | "answer" | "chat";
 export default function App() {
   const [mode,  setMode ] = useState<Mode>("welcome");
   const [answer,setAnswer] = useState<string>("");
+
+  useEffect(()=>{
+    const un = listen("ssc-connected",()=>setMode("chat"));
+    return ()=>{ un.then(f=>f()); };
+  },[]);
 
   return (
     <main className="container">
