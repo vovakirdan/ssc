@@ -18,7 +18,7 @@ export default function App() {
           showAnswerQR={ans=>{setAnswer(ans);setMode("answer");}}
         />
       )}
-      {mode==="offer"  && <QRCodeBlock        onBack={()=>setMode("welcome")}/>}
+      {mode==="offer" && (<QRCodeBlock onBack={()=>setMode("welcome")} onConnected={()=>setMode("chat")}/>)}
       {mode==="answer" && <AnswerQRCodeBlock  answer={answer} onBack={()=>setMode("welcome")}/>}
       {mode==="chat"   && <ChatPage           onDisconnect={()=>setMode("welcome")}/>}
     </main>
