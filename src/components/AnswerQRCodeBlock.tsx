@@ -8,7 +8,7 @@ type Props = {
 };
 
 export default function AnswerQRCodeBlock({ answer, onBack }: Props) {
-  const [seconds, setSeconds] = useState(120);         // 2-мин TTL
+  const [seconds, setSeconds] = useState(6000);         // 2-мин TTL
   const qrRef = useRef<SVGSVGElement>(null);
 
   useEffect(() => {
