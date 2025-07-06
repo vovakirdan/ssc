@@ -5,18 +5,13 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Scan, ArrowLeft, Link, Copy, Check } from 'lucide-react';
 import { toast } from 'sonner';
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 
 interface ScanQRProps {
   onBack: () => void;
   onConnected: () => void;
 }
-
-// Mock функция вместо Tauri команды
-const mockAcceptOfferAndCreateAnswer = async (offer: string): Promise<string> => {
-  await new Promise(resolve => setTimeout(resolve, 1000));
-  console.log('Accepting offer:', offer);
-  return 'mock_answer_' + Date.now();
-};
 
 const ScanQR = ({ onBack, onConnected }: ScanQRProps) => {
   const [offerInput, setOfferInput] = useState('');
@@ -24,11 +19,11 @@ const ScanQR = ({ onBack, onConnected }: ScanQRProps) => {
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
 
-  // Закомментированный listen для понимания когда произошло рукопожатие
-  // useEffect(()=>{
-  //   const un = listen("ssc-connected",()=>onConnected());
-  //   return ()=>{ un.then(f=>f()); };
-  // },[]);
+  // Слушаем событие успешного подключения
+  useEffect(() => {
+    const un = listen("ssc-connected", () => onConnected());
+    return () => { un.then(f => f()); };
+  }, [onConnected]);
 
   const handleAcceptOffer = async () => {
     if (!offerInput.trim()) {
@@ -38,9 +33,7 @@ const ScanQR = ({ onBack, onConnected }: ScanQRProps) => {
 
     setLoading(true);
     try {
-      // Закомментированный вызов Tauri
-      // const result = await invoke('accept_offer_and_create_answer', { encoded: offerInput }) as string;
-      const result = await mockAcceptOfferAndCreateAnswer(offerInput);
+      const result = await invoke('accept_offer_and_create_answer', { encoded: offerInput }) as string;
       setAnswer(result);
       toast.success('Ответ сгенерирован! Отправьте его собеседнику.');
     } catch (error) {

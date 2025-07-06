@@ -4,6 +4,8 @@ import { Input } from '@/components/ui/input';
 import { Card } from '@/components/ui/card';
 import { Send, Shield, ArrowLeft } from 'lucide-react';
 import { toast } from 'sonner';
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 
 interface ChatProps {
   onBack: () => void;
@@ -16,32 +18,25 @@ interface Message {
   isOwn: boolean;
 }
 
-// Mock функция вместо Tauri команды
-const mockSendText = async (msg: string): Promise<boolean> => {
-  await new Promise(resolve => setTimeout(resolve, 300));
-  console.log('Sending message:', msg);
-  return true;
-};
-
 const Chat = ({ onBack }: ChatProps) => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [newMessage, setNewMessage] = useState('');
   const [sending, setSending] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // Закомментированный listen для получения сообщений от Rust ядра
-  // useEffect(()=>{
-  //   const un = listen("ssc-message", (event) => {
-  //     const messageData = event.payload;
-  //     setMessages(prev => [...prev, {
-  //       id: Date.now().toString(),
-  //       text: messageData.text,
-  //       timestamp: new Date(),
-  //       isOwn: false
-  //     }]);
-  //   });
-  //   return ()=>{ un.then(f=>f()); };
-  // },[]);
+  // Слушаем события получения сообщений от Rust ядра
+  useEffect(() => {
+    const un = listen("ssc-message", (event: any) => {
+      const messageData = event.payload;
+      setMessages(prev => [...prev, {
+        id: Date.now().toString(),
+        text: messageData.text || messageData, // Поддерживаем разные форматы payload
+        timestamp: new Date(),
+        isOwn: false
+      }]);
+    });
+    return () => { un.then(f => f()); };
+  }, []);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -50,30 +45,6 @@ const Chat = ({ onBack }: ChatProps) => {
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
-
-  // Имитация получения сообщений для демонстрации
-  useEffect(() => {
-    const interval = setInterval(() => {
-      if (Math.random() > 0.95 && messages.length < 10) {
-        const demoMessages = [
-          "Привет! Соединение установлено.",
-          "Отлично работает!",
-          "Это супер секретно 🔒",
-          "Никто не может это прочитать",
-          "P2P соединение активно"
-        ];
-        
-        setMessages(prev => [...prev, {
-          id: Date.now().toString(),
-          text: demoMessages[Math.floor(Math.random() * demoMessages.length)],
-          timestamp: new Date(),
-          isOwn: false
-        }]);
-      }
-    }, 5000);
-
-    return () => clearInterval(interval);
-  }, [messages.length]);
 
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -95,9 +66,7 @@ const Chat = ({ onBack }: ChatProps) => {
     setMessages(prev => [...prev, newMsg]);
 
     try {
-      // Закомментированный вызов Tauri
-      // const success = await invoke('send_text', { msg: messageText }) as boolean;
-      const success = await mockSendText(messageText);
+      const success = await invoke('send_text', { msg: messageText }) as boolean;
       
       if (!success) {
         toast.error('Не удалось отправить сообщение');

@@ -4,23 +4,13 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { QrCode, Copy, Check, ArrowLeft, Scan } from 'lucide-react';
 import { toast } from 'sonner';
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 
 interface GenerateQRProps {
   onBack: () => void;
   onConnected: () => void;
 }
-
-// Mock функции вместо Tauri команд
-const mockGenerateOffer = async (): Promise<string> => {
-  await new Promise(resolve => setTimeout(resolve, 1000));
-  return 'mock_offer_' + Date.now();
-};
-
-const mockSetAnswer = async (answer: string): Promise<boolean> => {
-  await new Promise(resolve => setTimeout(resolve, 1000));
-  console.log('Setting answer:', answer);
-  return true;
-};
 
 const GenerateQR = ({ onBack, onConnected }: GenerateQRProps) => {
   const [offer, setOffer] = useState<string>('');
@@ -29,18 +19,16 @@ const GenerateQR = ({ onBack, onConnected }: GenerateQRProps) => {
   const [answer, setAnswer] = useState('');
   const [awaitingAnswer, setAwaitingAnswer] = useState(false);
 
-  // Закомментированный listen для понимания когда произошло рукопожатие
-  // useEffect(()=>{
-  //   const un = listen("ssc-connected",()=>onConnected());
-  //   return ()=>{ un.then(f=>f()); };
-  // },[]);
+  // Слушаем событие успешного подключения
+  useEffect(() => {
+    const un = listen("ssc-connected", () => onConnected());
+    return () => { un.then(f => f()); };
+  }, [onConnected]);
 
   const generateOffer = async () => {
     setLoading(true);
     try {
-      // Закомментированный вызов Tauri
-      // const result = await invoke('generate_offer') as string;
-      const result = await mockGenerateOffer();
+      const result = await invoke('generate_offer') as string;
       setOffer(result);
       setAwaitingAnswer(true);
       toast.success('QR-код сгенерирован!');
@@ -71,9 +59,7 @@ const GenerateQR = ({ onBack, onConnected }: GenerateQRProps) => {
 
     setLoading(true);
     try {
-      // Закомментированный вызов Tauri
-      // const success = await invoke('set_answer', { encoded: answer }) as boolean;
-      const success = await mockSetAnswer(answer);
+      const success = await invoke('set_answer', { encoded: answer }) as boolean;
       if (success) {
         toast.success('Соединение установлено!');
         setTimeout(() => onConnected(), 1000);
