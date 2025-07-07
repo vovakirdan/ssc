@@ -19,6 +19,7 @@ use webrtc::{
         sdp::session_description::RTCSessionDescription, RTCPeerConnection,
     },
 };
+use zeroize::Zeroize;
 
 /// ========== GLOBALS ==========
 static PEER: Lazy<Mutex<Option<Arc<RTCPeerConnection>>>> = Lazy::new(|| Mutex::new(None));
@@ -42,6 +43,16 @@ struct CryptoCtx {
     send_n: u64,
     recv_n: u64,
     sas : String,
+}
+
+impl Drop for CryptoCtx {
+    fn drop(&mut self) {
+        // Здесь мы не можем напрямую зануляться LessSafeKey, так как он не реализует Zeroize
+        // Но мы можем занулировать другие поля
+        self.send_n.zeroize();
+        self.recv_n.zeroize();
+        self.sas.zeroize();
+    }
 }
 
 /// ========== HELPERS ==========
