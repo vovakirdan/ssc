@@ -6,6 +6,7 @@ import { Send, Shield, ArrowLeft } from 'lucide-react';
 import { toast } from 'sonner';
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import FingerprintModal from '@/components/FingerprintModal';
 
 interface ChatProps {
   onBack: () => void;
@@ -25,6 +26,8 @@ const Chat = ({ onBack }: ChatProps) => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   // Состояние для отслеживания отключения собеседника
   const [disconnected, setDisconnected] = useState(false);
+  // Состояние для подтверждения fingerprint'а
+  const [verified, setVerified] = useState(false);
 
   // Слушаем события получения сообщений от Rust ядра
   useEffect(() => {
@@ -60,6 +63,7 @@ const Chat = ({ onBack }: ChatProps) => {
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
     
+    if (!verified) return; // блок до проверки fingerprint'а
     if (!newMessage.trim()) return;
 
     const messageText = newMessage.trim();
@@ -94,9 +98,13 @@ const Chat = ({ onBack }: ChatProps) => {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex flex-col">
-      {/* Header */}
-      <div className="bg-slate-800/50 border-b border-slate-700 p-4">
+    <>
+      {!verified && <FingerprintModal onConfirm={() => setVerified(true)} />}
+      
+      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex flex-col" 
+           style={{opacity: verified ? 1 : 0.3, pointerEvents: verified ? "auto" : "none"}}>
+        {/* Header */}
+        <div className="bg-slate-800/50 border-b border-slate-700 p-4">
         <div className="flex items-center justify-between max-w-4xl mx-auto">
           <div className="flex items-center space-x-4">
             <Button variant="ghost" size="icon" onClick={onBack} className="text-slate-400 hover:text-white">
@@ -181,6 +189,7 @@ const Chat = ({ onBack }: ChatProps) => {
         </form>
       </div>
     </div>
+    </>
   );
 };
 
