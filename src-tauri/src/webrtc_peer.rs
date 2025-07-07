@@ -41,6 +41,7 @@ struct CryptoCtx {
     opening: aead::LessSafeKey,
     send_n: u64,
     recv_n: u64,
+    last_accepted_seq: u64,
     sas : String,
 }
 
@@ -104,6 +105,7 @@ fn build_ctx(peer_pub: &[u8; 32]) -> CryptoCtx {
         opening, 
         send_n: 0, 
         recv_n: 0, 
+        last_accepted_seq: 0,
         sas : sas,
     }
 }
@@ -254,14 +256,46 @@ fn attach_dc(dc: &Arc<RTCDataChannel>) {
         // ----- иначе зашифрованное сообщение -----
         let mut lock = CRYPTO.lock().unwrap();
         if let Some(ref mut ctx) = *lock {
-            if msg.data.len() < TAG_LEN { return Box::pin(async{}) }
+            if msg.data.len() < TAG_LEN + 8 { return Box::pin(async{}) } // Минимум 8 байт для sequence number + TAG_LEN
     
-            let nonce = u64_to_nonce(ctx.recv_n); ctx.recv_n += 1;
             let mut buf = msg.data.to_vec();
-    
+            
+            // Пробуем расшифровать с текущим ожидаемым sequence number
+            let expected_seq = ctx.recv_n;
+            let nonce = u64_to_nonce(expected_seq);
+            
             if ctx.opening.open_in_place(nonce, aead::Aad::empty(), &mut buf).is_ok() {
-                let plain = String::from_utf8_lossy(&buf[..buf.len()-TAG_LEN]).to_string();
-                emit_message(&plain);
+                let plaintext = &buf[..buf.len()-TAG_LEN];
+                
+                // Проверяем, что сообщение содержит минимум 8 байт для sequence number
+                if plaintext.len() < 8 {
+                    return Box::pin(async{});
+                }
+                
+                // Извлекаем sequence number из расшифрованного сообщения
+                let seq_bytes = &plaintext[..8];
+                let received_seq = u64::from_be_bytes(seq_bytes.try_into().unwrap());
+                
+                // Защита от replay: проверяем, что sequence number больше последнего принятого
+                if received_seq > ctx.last_accepted_seq {
+                    // Обновляем последний принятый sequence number
+                    ctx.last_accepted_seq = received_seq;
+                    
+                    // Обновляем ожидаемый sequence number только если получили следующий по порядку
+                    if received_seq == expected_seq {
+                        ctx.recv_n += 1;
+                    } else {
+                        // Если получили не следующий по порядку, обновляем recv_n до received_seq + 1
+                        ctx.recv_n = received_seq + 1;
+                    }
+                    
+                    // Извлекаем текст сообщения (пропуская sequence number)
+                    let message_text = String::from_utf8_lossy(&plaintext[8..]).to_string();
+                    emit_message(&message_text);
+                } else {
+                    // Отбрасываем сообщение как replay attack
+                    println!("Replay attack detected: received seq {} <= last accepted seq {}", received_seq, ctx.last_accepted_seq);
+                }
             }
         }
         Box::pin(async{})
@@ -332,10 +366,17 @@ pub async fn send_text(text: String) -> bool {
         let buf = {
             let mut crypto_guard = CRYPTO.lock().unwrap();
             if let Some(ref mut ctx) = *crypto_guard {
-                let nonce = u64_to_nonce(ctx.send_n); 
+                let seq_num = ctx.send_n;
+                let nonce = u64_to_nonce(seq_num); 
                 ctx.send_n += 1;
 
-                let mut buf = text.into_bytes();
+                // Формируем сообщение: 8 байт sequence number + текст
+                let mut message = Vec::new();
+                message.extend_from_slice(&seq_num.to_be_bytes());
+                message.extend_from_slice(text.as_bytes());
+
+                // Шифруем сообщение целиком
+                let mut buf = message;
                 ctx.sealing.seal_in_place_append_tag(nonce, aead::Aad::empty(), &mut buf).unwrap();
                 
                 buf
