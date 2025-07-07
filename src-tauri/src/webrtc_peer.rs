@@ -137,7 +137,7 @@ fn attach_dc(dc: &Arc<RTCDataChannel>) {
     dc.on_message(Box::new(|msg| {
         let txt = String::from_utf8_lossy(&msg.data).to_string();
         emit_message(&txt);
-        println!("[DATA] Received: {}", txt);
+        // println!("[DATA] Received: {}", txt);
         Box::pin(async {})
     }));
     dc.on_close(Box::new(|| {

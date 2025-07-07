@@ -171,12 +171,14 @@ const ScanQR = ({ onBack, onConnected }: ScanQRProps) => {
                 Скопируйте этот ответ и отправьте его собеседнику:
               </p>
               <div className="flex flex-col items-center space-y-2">
-                <div className="bg-white rounded-lg flex items-center justify-center w-full aspect-square max-w-xs mx-auto">
-                  <div className="w-full h-full flex items-center justify-center">
-                    <QRCodeSVG value={answer} width="100%" height="100%" style={{ width: '100%', height: '100%' }} />
-                  </div>
-                  <div style={{ position: 'absolute', left: '-9999px', top: 0 }}>
-                    <QRCodeCanvas id="answer-qr-canvas" value={answer} size={512} />
+                <div className="bg-white p-4 rounded-lg w-full max-w-xs mx-auto">
+                  <div className="w-full aspect-square bg-slate-200 rounded flex items-center justify-center relative">
+                    <div className="w-full h-full flex items-center justify-center">
+                      <QRCodeSVG value={answer} width="100%" height="100%" style={{ width: '100%', height: '100%' }} />
+                    </div>
+                    <div style={{ position: 'absolute', left: '-9999px', top: 0 }}>
+                      <QRCodeCanvas id="answer-qr-canvas" value={answer} size={512} />
+                    </div>
                   </div>
                 </div>
                 <div className="flex items-center mt-2">
