@@ -1,4 +1,6 @@
 use base64::{engine::general_purpose, Engine as _};
+use flate2::{Compression, write::GzEncoder, read::GzDecoder};
+use std::io::{Read, Write};
 use once_cell::sync::Lazy;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -43,11 +45,31 @@ fn rtc_config() -> RTCConfiguration {
 fn random_id() -> String {
     hex::encode(rand::rng().random::<[u8; 8]>())
 }
+
 fn enc(p: &SdpPayload) -> String {
-    general_purpose::STANDARD.encode(serde_json::to_vec(p).unwrap())
+    // 1. JSON -> bytes
+    let json = serde_json::to_vec(p).unwrap();
+
+    // 2. GZIP compress
+    let mut gz = GzEncoder::new(Vec::new(), Compression::fast());
+    gz.write_all(&json).unwrap();
+    let compressed = gz.finish().unwrap();
+
+    // 3. base64
+    general_purpose::STANDARD.encode(compressed)
 }
+
 fn dec(s: &str) -> SdpPayload {
-    serde_json::from_slice(&general_purpose::STANDARD.decode(s).unwrap()).unwrap()
+    // 1. base64 -> bytes
+    let compressed = general_purpose::STANDARD.decode(s).unwrap();
+
+    // 2. gunzip
+    let mut gz = GzDecoder::new(&compressed[..]);
+    let mut json = Vec::new();
+    gz.read_to_end(&mut json).unwrap();
+
+    // 3. JSON -> struct
+    serde_json::from_slice(&json).unwrap()
 }
 
 fn emit_connected() {
