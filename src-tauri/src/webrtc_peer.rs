@@ -41,7 +41,6 @@ struct CryptoCtx {
     opening: aead::LessSafeKey,
     send_n: u64,
     recv_n: u64,
-    peer_pub: [u8; 32],
     sas : String,
 }
 
@@ -64,7 +63,9 @@ fn random_id() -> String {
 }
 
 pub fn get_fingerprint() -> Option<String> {
-    CRYPTO.lock().unwrap().as_ref().map(|c| c.sas.clone())
+    let result = CRYPTO.lock().unwrap().as_ref().map(|c| c.sas.clone());
+    // println!("get_fingerprint called, result: {:?}", result); // Отладочная информация
+    result
 }
 
 fn u64_to_nonce(v: u64) -> aead::Nonce {
@@ -103,7 +104,6 @@ fn build_ctx(peer_pub: &[u8; 32]) -> CryptoCtx {
         opening, 
         send_n: 0, 
         recv_n: 0, 
-        peer_pub: *peer_pub ,
         sas : sas,
     }
 }
@@ -194,7 +194,7 @@ async fn new_peer(initiator: bool) -> Arc<RTCPeerConnection> {
 
 /// общий обработчик data-channel
 fn attach_dc(dc: &Arc<RTCDataChannel>) {
-    println!("attach_dc called"); // Отладочная информация
+    // println!("attach_dc called"); // Отладочная информация
     {
         *DATA_CH.lock().unwrap() = Some(dc.clone());
     }
@@ -204,18 +204,24 @@ fn attach_dc(dc: &Arc<RTCDataChannel>) {
     let my_priv = agreement::EphemeralPrivateKey::generate(&agreement::X25519, &rng).unwrap();
     let my_pub = my_priv.compute_public_key().unwrap();
     *MY_PRIV.lock().unwrap() = Some(my_priv);
-    println!("Generated pub key: {}", hex::encode(my_pub.as_ref())); // Отладочная информация
+    // println!("Generated pub key: {}", hex::encode(my_pub.as_ref())); // Отладочная информация
 
     // Отправляем наш pub-key когда data channel открыт
     dc.on_open(Box::new({
         let dc = dc.clone();
         move || {
-            println!("Data channel opened, sending pub key..."); // Отладочная информация
+            // println!("Data channel opened, sending pub key..."); // Отладочная информация
             tauri::async_runtime::spawn({
                 let dc = dc.clone();
                 async move {
                     let result = dc.send(&Bytes::from(my_pub.as_ref().to_vec())).await;
-                    println!("Send result: {:?}", result); // Отладочная информация
+                    // println!("Send result: {:?}", result); // Отладочная информация
+                    
+                    // После отправки pub-key проверяем, есть ли у нас уже криптографический контекст
+                    if CRYPTO.lock().unwrap().is_some() {
+                        // println!("We already have crypto context, sending connected event"); // Отладочная информация
+                        emit_connected();
+                    }
                 }
             });
             Box::pin(async {})
@@ -223,20 +229,25 @@ fn attach_dc(dc: &Arc<RTCDataChannel>) {
     }));
 
     dc.on_message(Box::new(|msg| {
-        println!("Received message, length: {}", msg.data.len()); // Отладочная информация
+        // println!("Received message, length: {}", msg.data.len()); // Отладочная информация
         
         // ----- если это 32-байтовый pub-key -----
         if msg.data.len() == 32 {
             let peer_pub = <[u8;32]>::try_from(&msg.data[..32]).unwrap();
-            println!("Received pub key: {}", hex::encode(&peer_pub)); // Отладочная информация
+            // println!("Received pub key: {}", hex::encode(&peer_pub)); // Отладочная информация
             
             // Строим криптографический контекст
             let ctx = build_ctx(&peer_pub);
-            println!("SAS generated: {}", ctx.sas); // Отладочная информация
+            // println!("SAS generated: {}", ctx.sas); // Отладочная информация
             *CRYPTO.lock().unwrap() = Some(ctx);
             
-            // Отправляем событие подключения
-            emit_connected();
+            // Отправляем событие подключения только если у нас есть приватный ключ (мы уже отправили свой pub-key)
+            if MY_PRIV.lock().unwrap().is_none() {
+                // println!("Sending connected event"); // Отладочная информация
+                emit_connected();
+            } else {
+                // println!("Waiting for our pub-key to be sent before emitting connected"); // Отладочная информация
+            }
             return Box::pin(async{});
         }
     
