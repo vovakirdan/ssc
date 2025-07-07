@@ -16,6 +16,7 @@ pub fn run() {
             signaling::set_answer,
             signaling::send_text,
             signaling::get_fingerprint,
+            signaling::disconnect,
             greet
         ])
         .run(tauri::generate_context!())

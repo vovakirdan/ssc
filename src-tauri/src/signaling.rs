@@ -28,3 +28,8 @@ pub async fn send_text(msg: String) -> bool {
 pub fn get_fingerprint() -> Option<String> {
     webrtc_peer::get_fingerprint()
 }
+
+#[command]
+pub async fn disconnect() {
+    webrtc_peer::disconnect().await
+}

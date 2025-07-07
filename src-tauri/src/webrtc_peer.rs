@@ -326,3 +326,24 @@ pub async fn send_text(text: String) -> bool {
     }
     false
 }
+
+/// ручное разъединение
+pub async fn disconnect() {
+    // извлекаем data channel и освобождаем мьютекс
+    let dc = DATA_CH.lock().unwrap().take();
+    if let Some(dc) = dc {
+        let _ = dc.close().await;
+    }
+    
+    // извлекаем peer connection и освобождаем мьютекс
+    let pc = PEER.lock().unwrap().take();
+    if let Some(pc) = pc {
+        let _ = pc.close().await;
+    }
+    
+    // очищаем криптографический контекст
+    *CRYPTO.lock().unwrap() = None;
+    
+    // отправляем событие отключения
+    emit_disconnected();
+}
