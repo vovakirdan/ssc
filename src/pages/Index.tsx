@@ -31,7 +31,7 @@ const Index = () => {
   }
 
   if (mode === 'generate') {
-    return <GenerateQR onBack={handleBack} onConnected={handleConnected} />;
+    return <GenerateQR onBack={handleBack} onConnected={handleConnected} autoGenerate={true} />;
   }
 
   if (mode === 'scan') {

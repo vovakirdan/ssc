@@ -2,18 +2,20 @@ import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
-import { QrCode as QrCodeIcon, Copy, Check, ArrowLeft, Scan } from 'lucide-react';
+import { QrCode as QrCodeIcon, Copy, Check, ArrowLeft, Scan, Download } from 'lucide-react';
 import { toast } from 'sonner';
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { QRCodeSVG } from 'qrcode.react';
+import { QRCodeCanvas } from 'qrcode.react';
 
 interface GenerateQRProps {
   onBack: () => void;
   onConnected: () => void;
+  autoGenerate?: boolean;
 }
 
-const GenerateQR = ({ onBack, onConnected }: GenerateQRProps) => {
+const GenerateQR = ({ onBack, onConnected, autoGenerate }: GenerateQRProps) => {
   const [offer, setOffer] = useState<string>('');
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -25,6 +27,14 @@ const GenerateQR = ({ onBack, onConnected }: GenerateQRProps) => {
     const un = listen("ssc-connected", () => onConnected());
     return () => { un.then(f => f()); };
   }, [onConnected]);
+
+  // Генерируем QR-код автоматически при открытии страницы
+  useEffect(() => {
+    if (autoGenerate && !offer && !loading) {
+      generateOffer();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoGenerate]);
 
   const generateOffer = async () => {
     setLoading(true);
@@ -94,21 +104,41 @@ const GenerateQR = ({ onBack, onConnected }: GenerateQRProps) => {
           </CardHeader>
           <CardContent className="space-y-4">
             {!offer ? (
-              <Button 
-                onClick={generateOffer} 
-                disabled={loading}
-                className="w-full bg-emerald-600 hover:bg-emerald-700"
-              >
-                {loading ? 'Генерация...' : 'Создать QR-код'}
-              </Button>
+              <div className="w-full text-center text-slate-400 py-8">Генерация QR-кода...</div>
             ) : (
               <div className="space-y-4">
                 <div className="bg-white p-4 rounded-lg">
-                  <div className="w-full h-[350px] bg-slate-200 rounded flex items-center justify-center">
-                    <QRCodeSVG value={offer} size={350} />
+                  <div className="w-full aspect-square bg-slate-200 rounded flex items-center justify-center relative">
+                    <div className="w-full h-full flex items-center justify-center">
+                      <QRCodeSVG value={offer} width="100%" height="100%" style={{ width: '100%', height: '100%' }} />
+                    </div>
+                    <div style={{ position: 'absolute', left: '-9999px', top: 0 }}>
+                      <QRCodeCanvas id="qr-canvas" value={offer} size={512} />
+                    </div>
                   </div>
                 </div>
-                
+                <div className="flex items-center mt-2">
+                  <span className="text-slate-300 mr-2">Сохранить QR</span>
+                  <Button
+                    size="icon"
+                    className="bg-slate-600 hover:bg-slate-500"
+                    onClick={() => {
+                      const canvas = document.getElementById('qr-canvas') as HTMLCanvasElement | null;
+                      if (!canvas) return;
+                      const url = canvas.toDataURL('image/png');
+                      const a = document.createElement('a');
+                      a.href = url;
+                      a.download = 'qr-code.png';
+                      document.body.appendChild(a);
+                      a.click();
+                      document.body.removeChild(a);
+                      toast.success('QR-код сохранён в PNG!');
+                    }}
+                    title="Сохранить QR-код в PNG"
+                  >
+                    <Download className="w-5 h-5" />
+                  </Button>
+                </div>
                 <div className="space-y-2">
                   <label className="text-slate-300 text-sm">Или поделитесь ссылкой:</label>
                   <div className="flex space-x-2">

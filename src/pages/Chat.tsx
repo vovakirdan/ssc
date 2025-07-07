@@ -23,10 +23,12 @@ const Chat = ({ onBack }: ChatProps) => {
   const [newMessage, setNewMessage] = useState('');
   const [sending, setSending] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  // Состояние для отслеживания отключения собеседника
+  const [disconnected, setDisconnected] = useState(false);
 
   // Слушаем события получения сообщений от Rust ядра
   useEffect(() => {
-    const un = listen("ssc-message", (event: any) => {
+    const unMsg = listen("ssc-message", (event: any) => {
       const messageData = event.payload;
       setMessages(prev => [...prev, {
         id: Date.now().toString(),
@@ -35,7 +37,16 @@ const Chat = ({ onBack }: ChatProps) => {
         isOwn: false
       }]);
     });
-    return () => { un.then(f => f()); };
+    // Слушаем событие отключения собеседника
+    const unDisc = listen("ssc-disconnected", () => {
+      setDisconnected(true);
+      // Показываем уведомление
+      toast.error('Собеседник отключился');
+    });
+    return () => {
+      unMsg.then(f => f());
+      unDisc.then(f => f());
+    };
   }, []);
 
   const scrollToBottom = () => {
@@ -99,9 +110,17 @@ const Chat = ({ onBack }: ChatProps) => {
               </div>
             </div>
           </div>
-          <div className="w-3 h-3 bg-emerald-500 rounded-full animate-pulse"></div>
+          {/* Индикатор статуса подключения */}
+          <div className={`w-3 h-3 rounded-full ${disconnected ? 'bg-red-500' : 'bg-emerald-500 animate-pulse'}`}></div>
         </div>
       </div>
+
+      {/* Баннер об отключении собеседника */}
+      {disconnected && (
+        <div className="bg-red-500/80 text-white text-center py-2 font-semibold">
+          Собеседник отключился
+        </div>
+      )}
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto p-4">
