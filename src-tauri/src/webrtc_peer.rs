@@ -24,6 +24,7 @@ use webrtc::{
 static PEER: Lazy<Mutex<Option<Arc<RTCPeerConnection>>>> = Lazy::new(|| Mutex::new(None));
 static DATA_CH: Lazy<Mutex<Option<Arc<RTCDataChannel>>>> = Lazy::new(|| Mutex::new(None));
 static CRYPTO: Lazy<Mutex<Option<CryptoCtx>>> = Lazy::new(|| Mutex::new(None));
+static MY_PRIV: Lazy<Mutex<Option<agreement::EphemeralPrivateKey>>> = Lazy::new(|| Mutex::new(None));
 pub static APP: Lazy<Mutex<Option<AppHandle>>> = Lazy::new(|| Mutex::new(None));
 
 const TAG_LEN: usize = 16;
@@ -41,6 +42,7 @@ struct CryptoCtx {
     send_n: u64,
     recv_n: u64,
     peer_pub: [u8; 32],
+    sas : String,
 }
 
 /// ========== HELPERS ==========
@@ -62,10 +64,7 @@ fn random_id() -> String {
 }
 
 pub fn get_fingerprint() -> Option<String> {
-    CRYPTO.lock().unwrap().as_ref().map(|c| {
-        let hash = Sha256::digest(&c.peer_pub);
-        hex::encode(&hash[..4])          // 8 hex символов
-    })
+    CRYPTO.lock().unwrap().as_ref().map(|c| c.sas.clone())
 }
 
 fn u64_to_nonce(v: u64) -> aead::Nonce {
@@ -75,11 +74,8 @@ fn u64_to_nonce(v: u64) -> aead::Nonce {
 }
 
 fn build_ctx(peer_pub: &[u8; 32]) -> CryptoCtx {
-    let rng   = ring_rand::SystemRandom::new();
-
     // ----- свой ключ -----
-    let my_priv = agreement::EphemeralPrivateKey::generate(&agreement::X25519, &rng).unwrap();
-    let my_pub = my_priv.compute_public_key().unwrap();
+    let my_priv = MY_PRIV.lock().unwrap().take().expect("private key must exist during key-exchange");
 
     // ----- общий секрет -----
     let peer_pub_key = agreement::UnparsedPublicKey::new(&agreement::X25519, peer_pub);
@@ -95,6 +91,10 @@ fn build_ctx(peer_pub: &[u8; 32]) -> CryptoCtx {
     let mut key = [0u8; 32];
     hk.expand(b"ssc-chat", &mut key).unwrap();
 
+    // ----- SAS -----
+    let fp_raw = Sha256::digest(&key);
+    let sas = hex::encode(&fp_raw[..4]);
+
     let sealing = aead::LessSafeKey::new(aead::UnboundKey::new(&aead::CHACHA20_POLY1305, &key).unwrap());
     let opening = aead::LessSafeKey::new(aead::UnboundKey::new(&aead::CHACHA20_POLY1305, &key).unwrap());
 
@@ -103,7 +103,8 @@ fn build_ctx(peer_pub: &[u8; 32]) -> CryptoCtx {
         opening, 
         send_n: 0, 
         recv_n: 0, 
-        peer_pub: *peer_pub 
+        peer_pub: *peer_pub ,
+        sas : sas,
     }
 }
 
@@ -204,6 +205,7 @@ fn attach_dc(dc: &Arc<RTCDataChannel>) {
                 let rng = ring_rand::SystemRandom::new();
                 let my_priv = agreement::EphemeralPrivateKey::generate(&agreement::X25519, &rng).unwrap();
                 let my_pub = my_priv.compute_public_key().unwrap();
+                *MY_PRIV.lock().unwrap() = Some(my_priv);
 
                 // отправляем Bytes
                 let _ = dc.send(&Bytes::from(my_pub.as_ref().to_vec())).await;
@@ -214,6 +216,7 @@ fn attach_dc(dc: &Arc<RTCDataChannel>) {
                     opening: aead::LessSafeKey::new(aead::UnboundKey::new(&aead::CHACHA20_POLY1305,&[0;32]).unwrap()),
                     send_n:0, recv_n:0,
                     peer_pub:[0;32],
+                    sas: "".to_string(),
                 });
             }
         }
