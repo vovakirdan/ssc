@@ -1,9 +1,9 @@
 use base64::{engine::general_purpose, Engine as _};
-use flate2::{Compression, write::GzEncoder, read::GzDecoder};
-use std::io::{Read, Write};
+use flate2::{read::GzDecoder, write::GzEncoder, Compression};
 use once_cell::sync::Lazy;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
+use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter};
 use webrtc::{
@@ -72,16 +72,18 @@ fn dec(s: &str) -> SdpPayload {
     serde_json::from_slice(&json).unwrap()
 }
 
-fn emit_connected() {
+fn emit_state(evt: &str) {
     if let Some(app) = APP.lock().unwrap().clone() {
-        let _ = app.emit("ssc-connected", ());
+        let _ = app.emit(evt, ());
     }
 }
 
+fn emit_connected() {
+    emit_state("ssc-connected");
+}
+
 fn emit_disconnected() {
-    if let Some(app) = APP.lock().unwrap().clone() {
-        let _ = app.emit("ssc-disconnected", ());
-    }
+    emit_state("ssc-disconnected");
 }
 
 fn emit_message(msg: &str) {
@@ -101,8 +103,12 @@ async fn new_peer(initiator: bool) -> Arc<RTCPeerConnection> {
     let pc = Arc::new(api.new_peer_connection(rtc_config()).await.unwrap());
 
     pc.on_peer_connection_state_change(Box::new(|st: RTCPeerConnectionState| {
-        if st == RTCPeerConnectionState::Connected {
-            emit_connected(); // call helper
+        match st {
+            RTCPeerConnectionState::Connected => emit_connected(),
+            RTCPeerConnectionState::Disconnected
+            | RTCPeerConnectionState::Failed
+            | RTCPeerConnectionState::Closed => emit_disconnected(),
+            _ => {}
         }
         Box::pin(async {})
     }));
