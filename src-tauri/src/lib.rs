@@ -15,6 +15,7 @@ pub fn run() {
             signaling::accept_offer_and_create_answer,
             signaling::set_answer,
             signaling::send_text,
+            signaling::get_fingerprint,
             greet
         ])
         .run(tauri::generate_context!())

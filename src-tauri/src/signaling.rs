@@ -23,3 +23,8 @@ pub async fn set_answer(app: AppHandle, encoded: String) -> bool {
 pub async fn send_text(msg: String) -> bool {
     webrtc_peer::send_text(msg).await
 }
+
+#[command]
+pub fn get_fingerprint() -> Option<String> {
+    webrtc_peer::get_fingerprint()
+}

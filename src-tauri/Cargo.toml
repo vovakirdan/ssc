@@ -30,4 +30,8 @@ webrtc = "0.13.0"
 tokio = { version = "1.46.0", features = ["full"] }
 hex = "0.4.3"
 flate2 = "1.1.2"
+ring = "0.17.14"
+hkdf = "0.12.4"
+sha2 = "0.10.9"
+bytes = "1.10.1"
 
