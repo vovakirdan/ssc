@@ -7,7 +7,8 @@
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
     "beforeBuildCommand": "npm run build",
-    "frontendDist": "../dist"
+    "frontendDist": "../dist",
+    "runner": null
   },
   "app": {
     "windows": [
@@ -30,6 +31,43 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
-  }
+    ],
+    "macOS": {
+      "minimumSystemVersion": "10.13",
+      "hardenedRuntime": true,
+      "entitlements": "src-tauri/mac.entitlements",
+      "files": {
+        "embedded.provisionprofile": "src-tauri/profile.provisionprofile"
+      }
+    },
+    "android": {
+      "minSdkVersion": 24,
+      "versionCode": 1
+    },
+    "windows": {
+      "certificateThumbprint": null,
+      "timestampUrl": null,
+      "digestAlgorithm": "sha256",
+      "webviewInstallMode": {
+        "silent": true,
+        "type": "downloadBootstrapper"
+      }
+    },
+    "linux": {
+      "appimage": {
+        "bundleMediaFramework": false,
+        "files": {}
+      },
+      "deb": {
+        "files": {}
+      },
+      "rpm": {
+        "epoch": 0,
+        "release": "1",
+        "files": {}
+      }
+    },
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {}
 }
