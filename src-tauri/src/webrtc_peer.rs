@@ -56,6 +56,18 @@ fn emit_connected() {
     }
 }
 
+fn emit_disconnected() {
+    if let Some(app) = APP.lock().unwrap().clone() {
+        let _ = app.emit("ssc-disconnected", ());
+    }
+}
+
+fn emit_message(msg: &str) {
+    if let Some(app) = APP.lock().unwrap().clone() {
+        let _ = app.emit("ssc-message", msg);
+    }
+}
+
 async fn wait_ice(pc: &RTCPeerConnection) {
     let mut done = pc.gathering_complete_promise().await;
     done.recv().await;
@@ -96,7 +108,12 @@ fn attach_dc(dc: &Arc<RTCDataChannel>) {
     }
     dc.on_message(Box::new(|msg| {
         let txt = String::from_utf8_lossy(&msg.data).to_string();
+        emit_message(&txt);
         println!("[DATA] Received: {}", txt);
+        Box::pin(async {})
+    }));
+    dc.on_close(Box::new(|| {
+        emit_disconnected();
         Box::pin(async {})
     }));
 }
