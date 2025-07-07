@@ -214,7 +214,7 @@ fn attach_dc(dc: &Arc<RTCDataChannel>) {
             tauri::async_runtime::spawn({
                 let dc = dc.clone();
                 async move {
-                    let result = dc.send(&Bytes::from(my_pub.as_ref().to_vec())).await;
+                    let _result = dc.send(&Bytes::from(my_pub.as_ref().to_vec())).await;
                     // println!("Send result: {:?}", result); // Отладочная информация
                     
                     // После отправки pub-key проверяем, есть ли у нас уже криптографический контекст
