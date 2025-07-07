@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
-import { QrCode as QrCodeIcon, Copy, Check, ArrowLeft, Scan, Download } from 'lucide-react';
+import { QrCode as QrCodeIcon, Copy, Check, ArrowLeft, Scan, Download, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -208,12 +208,24 @@ const GenerateQR = ({ onBack, onConnected, autoGenerate }: GenerateQRProps) => {
               <p className="text-slate-300 text-sm">
                 Вставьте ответ от собеседника:
               </p>
-              <Input
-                placeholder="Вставьте ответ здесь..."
-                value={answer}
-                onChange={(e) => setAnswer(e.target.value)}
-                className="bg-slate-700 border-slate-600 text-white"
-              />
+              <div className="flex space-x-2">
+                <Input
+                  placeholder="Вставьте ответ здесь..."
+                  value={answer}
+                  onChange={(e) => setAnswer(e.target.value)}
+                  className="bg-slate-700 border-slate-600 text-white h-10 resize-none"
+                  style={{ maxWidth: '100%', overflow: 'hidden' }}
+                />
+                <Button
+                  size="icon"
+                  onClick={() => setAnswer('')}
+                  disabled={!answer.trim()}
+                  className="bg-red-600 hover:bg-red-500"
+                  title="Очистить"
+                >
+                  <X className="w-4 h-4" />
+                </Button>
+              </div>
               <Button 
                 onClick={handleAnswerSubmit}
                 disabled={loading || !answer.trim()}
