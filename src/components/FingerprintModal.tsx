@@ -1,9 +1,12 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
-type Props = { onConfirm: () => void; };
+type Props = { 
+  onConfirm: () => void; 
+  onCancel: () => void; 
+};
 
-export default function FingerprintModal({ onConfirm }: Props) {
+export default function FingerprintModal({ onConfirm, onCancel }: Props) {
   const [localFp, setLocalFp]   = useState<string>();
 //   const [remoteFp, setRemoteFp] = useState<string>();
   const [checked, setChecked]   = useState(false);
@@ -28,10 +31,16 @@ export default function FingerprintModal({ onConfirm }: Props) {
           &nbsp;I see the same code on both sides
         </label>
 
-        <button className="main-btn" style={{marginTop:16}}
-                disabled={!checked} onClick={onConfirm}>
-          Continue
-        </button>
+        <div style={{display: 'flex', gap: 12, marginTop: 16, justifyContent: 'center'}}>
+          <button className="main-btn" style={{background: '#d32f2f'}}
+                  onClick={onCancel}>
+            Cancel
+          </button>
+          <button className="main-btn"
+                  disabled={!checked} onClick={onConfirm}>
+            Continue
+          </button>
+        </div>
       </div>
     </div>
   );

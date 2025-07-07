@@ -29,6 +29,16 @@ const Chat = ({ onBack }: ChatProps) => {
   // Состояние для подтверждения fingerprint'а
   const [verified, setVerified] = useState(false);
 
+  // Функция для обработки отмены fingerprint'а
+  const handleFingerprintCancel = async () => {
+    try {
+      await invoke('disconnect');
+    } catch (error) {
+      console.error('Error disconnecting:', error);
+    }
+    onBack();
+  };
+
   // Слушаем события получения сообщений от Rust ядра
   useEffect(() => {
     const unMsg = listen("ssc-message", (event: any) => {
@@ -99,7 +109,10 @@ const Chat = ({ onBack }: ChatProps) => {
 
   return (
     <>
-      {!verified && <FingerprintModal onConfirm={() => setVerified(true)} />}
+      {!verified && <FingerprintModal 
+        onConfirm={() => setVerified(true)} 
+        onCancel={handleFingerprintCancel}
+      />}
       
       <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex flex-col" 
            style={{opacity: verified ? 1 : 0.3, pointerEvents: verified ? "auto" : "none"}}>
