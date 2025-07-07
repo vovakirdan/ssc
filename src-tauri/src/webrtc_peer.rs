@@ -146,6 +146,7 @@ fn emit_connected() {
 
 fn emit_disconnected() {
     *CRYPTO.lock().unwrap() = None;
+    *MY_PRIV.lock().unwrap() = None;
     emit_state("ssc-disconnected");
 }
 
@@ -193,47 +194,54 @@ async fn new_peer(initiator: bool) -> Arc<RTCPeerConnection> {
 
 /// общий обработчик data-channel
 fn attach_dc(dc: &Arc<RTCDataChannel>) {
+    println!("attach_dc called"); // Отладочная информация
     {
         *DATA_CH.lock().unwrap() = Some(dc.clone());
     }
 
-    // SEND our pub-key immediately
-    tauri::async_runtime::spawn({
+    // Генерируем ключи сразу при создании data channel
+    let rng = ring_rand::SystemRandom::new();
+    let my_priv = agreement::EphemeralPrivateKey::generate(&agreement::X25519, &rng).unwrap();
+    let my_pub = my_priv.compute_public_key().unwrap();
+    *MY_PRIV.lock().unwrap() = Some(my_priv);
+    println!("Generated pub key: {}", hex::encode(my_pub.as_ref())); // Отладочная информация
+
+    // Отправляем наш pub-key когда data channel открыт
+    dc.on_open(Box::new({
         let dc = dc.clone();
-        async move {
-            if CRYPTO.lock().unwrap().is_none() {
-                let rng = ring_rand::SystemRandom::new();
-                let my_priv = agreement::EphemeralPrivateKey::generate(&agreement::X25519, &rng).unwrap();
-                let my_pub = my_priv.compute_public_key().unwrap();
-                *MY_PRIV.lock().unwrap() = Some(my_priv);
-
-                // отправляем Bytes
-                let _ = dc.send(&Bytes::from(my_pub.as_ref().to_vec())).await;
-
-                // сохраняем «пустой» ctx (будет перестроен когда придёт peer-key)
-                *CRYPTO.lock().unwrap() = Some(CryptoCtx{
-                    sealing: aead::LessSafeKey::new(aead::UnboundKey::new(&aead::CHACHA20_POLY1305,&[0;32]).unwrap()),
-                    opening: aead::LessSafeKey::new(aead::UnboundKey::new(&aead::CHACHA20_POLY1305,&[0;32]).unwrap()),
-                    send_n:0, recv_n:0,
-                    peer_pub:[0;32],
-                    sas: "".to_string(),
-                });
-            }
+        move || {
+            println!("Data channel opened, sending pub key..."); // Отладочная информация
+            tauri::async_runtime::spawn({
+                let dc = dc.clone();
+                async move {
+                    let result = dc.send(&Bytes::from(my_pub.as_ref().to_vec())).await;
+                    println!("Send result: {:?}", result); // Отладочная информация
+                }
+            });
+            Box::pin(async {})
         }
-    });
+    }));
 
     dc.on_message(Box::new(|msg| {
-        let mut lock = CRYPTO.lock().unwrap();
-    
-        // ----- если это 1-й 32-байтовый pub-key -----
-        if msg.data.len()==32 && lock.as_ref().map(|c| c.peer_pub)==Some([0u8;32]) {
+        println!("Received message, length: {}", msg.data.len()); // Отладочная информация
+        
+        // ----- если это 32-байтовый pub-key -----
+        if msg.data.len() == 32 {
             let peer_pub = <[u8;32]>::try_from(&msg.data[..32]).unwrap();
-            *lock = Some(build_ctx(&peer_pub));
+            println!("Received pub key: {}", hex::encode(&peer_pub)); // Отладочная информация
+            
+            // Строим криптографический контекст
+            let ctx = build_ctx(&peer_pub);
+            println!("SAS generated: {}", ctx.sas); // Отладочная информация
+            *CRYPTO.lock().unwrap() = Some(ctx);
+            
+            // Отправляем событие подключения
             emit_connected();
             return Box::pin(async{});
         }
     
         // ----- иначе зашифрованное сообщение -----
+        let mut lock = CRYPTO.lock().unwrap();
         if let Some(ref mut ctx) = *lock {
             if msg.data.len() < TAG_LEN { return Box::pin(async{}) }
     
@@ -344,8 +352,9 @@ pub async fn disconnect() {
         let _ = pc.close().await;
     }
     
-    // очищаем криптографический контекст
+    // очищаем криптографический контекст и приватный ключ
     *CRYPTO.lock().unwrap() = None;
+    *MY_PRIV.lock().unwrap() = None;
     
     // отправляем событие отключения
     emit_disconnected();
