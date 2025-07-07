@@ -2,10 +2,11 @@ import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
-import { QrCode, Copy, Check, ArrowLeft, Scan } from 'lucide-react';
+import { QrCode as QrCodeIcon, Copy, Check, ArrowLeft, Scan } from 'lucide-react';
 import { toast } from 'sonner';
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { QRCodeSVG } from 'qrcode.react';
 
 interface GenerateQRProps {
   onBack: () => void;
@@ -87,7 +88,7 @@ const GenerateQR = ({ onBack, onConnected }: GenerateQRProps) => {
         <Card className="bg-slate-800/50 border-slate-700">
           <CardHeader>
             <CardTitle className="text-white flex items-center space-x-2">
-              <QrCode className="w-5 h-5" />
+              <QrCodeIcon className="w-5 h-5" />
               <span>Генерация QR-кода</span>
             </CardTitle>
           </CardHeader>
@@ -103,9 +104,8 @@ const GenerateQR = ({ onBack, onConnected }: GenerateQRProps) => {
             ) : (
               <div className="space-y-4">
                 <div className="bg-white p-4 rounded-lg">
-                  <div className="w-full h-48 bg-slate-200 rounded flex items-center justify-center">
-                    <QrCode className="w-16 h-16 text-slate-600" />
-                    <span className="ml-2 text-slate-600">QR-код: {offer.substring(0, 10)}...</span>
+                  <div className="w-full h-[350px] bg-slate-200 rounded flex items-center justify-center">
+                    <QRCodeSVG value={offer} size={350} />
                   </div>
                 </div>
                 
