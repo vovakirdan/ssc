@@ -40,7 +40,6 @@ struct CryptoCtx {
     opening: aead::LessSafeKey,
     send_n: u64,
     recv_n: u64,
-    my_pub: [u8; 32],
     peer_pub: [u8; 32],
 }
 
@@ -104,7 +103,6 @@ fn build_ctx(peer_pub: &[u8; 32]) -> CryptoCtx {
         opening, 
         send_n: 0, 
         recv_n: 0, 
-        my_pub: my_pub.as_ref().try_into().unwrap(), 
         peer_pub: *peer_pub 
     }
 }
@@ -215,7 +213,6 @@ fn attach_dc(dc: &Arc<RTCDataChannel>) {
                     sealing: aead::LessSafeKey::new(aead::UnboundKey::new(&aead::CHACHA20_POLY1305,&[0;32]).unwrap()),
                     opening: aead::LessSafeKey::new(aead::UnboundKey::new(&aead::CHACHA20_POLY1305,&[0;32]).unwrap()),
                     send_n:0, recv_n:0,
-                    my_pub: my_pub.as_ref().try_into().unwrap(),
                     peer_pub:[0;32],
                 });
             }
