@@ -181,7 +181,9 @@ async fn new_peer(initiator: bool) -> Arc<RTCPeerConnection> {
 
     pc.on_peer_connection_state_change(Box::new(|st: RTCPeerConnectionState| {
         match st {
-            RTCPeerConnectionState::Connected => emit_connected(),
+            RTCPeerConnectionState::Connected => {
+                // Не отправляем событие подключения здесь, ждем установки криптографического контекста
+            },
             RTCPeerConnectionState::Disconnected
             | RTCPeerConnectionState::Failed
             | RTCPeerConnectionState::Closed => emit_disconnected(),
@@ -231,12 +233,6 @@ fn attach_dc(dc: &Arc<RTCDataChannel>) {
                 async move {
                     let result = dc.send(&Bytes::from(my_pub.as_ref().to_vec())).await;
                     // println!("Send result: {:?}", result); // Отладочная информация
-                    
-                    // После отправки pub-key проверяем, есть ли у нас уже криптографический контекст
-                    if CRYPTO.lock().unwrap().is_some() {
-                        // println!("We already have crypto context, sending connected event"); // Отладочная информация
-                        emit_connected();
-                    }
                 }
             });
             Box::pin(async {})
@@ -259,13 +255,9 @@ fn attach_dc(dc: &Arc<RTCDataChannel>) {
             // println!("SAS generated: {}", ctx.sas); // Отладочная информация
             *CRYPTO.lock().unwrap() = Some(ctx);
             
-            // Отправляем событие подключения только если у нас есть приватный ключ (мы уже отправили свой pub-key)
-            if MY_PRIV.lock().unwrap().is_none() {
-                // println!("Sending connected event"); // Отладочная информация
-                emit_connected();
-            } else {
-                // println!("Waiting for our pub-key to be sent before emitting connected"); // Отладочная информация
-            }
+            // Всегда отправляем событие подключения после установки криптографического контекста
+            // println!("Crypto context established, sending connected event"); // Отладочная информация
+            emit_connected();
             return Box::pin(async{});
         }
     
