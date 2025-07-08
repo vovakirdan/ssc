@@ -161,10 +161,13 @@ fn dec(s: &str) -> SdpPayload {
     // 1. base64 -> bytes
     let compressed = general_purpose::STANDARD.decode(s).unwrap();
 
-    // 2. gunzip
-    let mut gz = GzDecoder::new(&compressed[..]);
+    // 2. gunzip с ограничением размера для защиты от zip-bomb
+    let gz = GzDecoder::new(&compressed[..]);
     let mut json = Vec::new();
-    gz.read_to_end(&mut json).unwrap();
+    // Ограничиваем размер распаковываемых данных до 256 KiB
+    const MAX_DECOMPRESSED_SIZE: u64 = 256 * 1024; // 256 KiB
+    let mut limited_reader = gz.take(MAX_DECOMPRESSED_SIZE);
+    limited_reader.read_to_end(&mut json).unwrap();
 
     // 3. JSON -> struct
     serde_json::from_slice(&json).unwrap()
