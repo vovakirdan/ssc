@@ -21,7 +21,7 @@ use webrtc::{
 };
 use zeroize::{Zeroize, ZeroizeOnDrop};
 use chacha20poly1305::{
-    aead::{Aead, AeadCore, KeyInit, OsRng, Nonce},
+    aead::{Aead, KeyInit, Nonce},
     ChaCha20Poly1305, Key,
 };
 
@@ -52,10 +52,6 @@ struct ZeroizedKey {
 impl ZeroizedKey {
     fn new(key: [u8; 32]) -> Self {
         Self { key }
-    }
-    
-    fn as_bytes(&self) -> &[u8; 32] {
-        &self.key
     }
 }
 
@@ -166,8 +162,8 @@ fn build_ctx(peer_pub: &[u8; 32]) -> CryptoCtx {
     // Очищаем okm после использования
     okm.zeroize();
 
-    let sealing = ChaCha20Poly1305::new(Key::from(send_key));
-    let opening = ChaCha20Poly1305::new(Key::from(recv_key));
+    let sealing = ChaCha20Poly1305::new(&Key::from(send_key));
+    let opening = ChaCha20Poly1305::new(&Key::from(recv_key));
     
     // Создаём безопасные обёртки для ключей
     let send_key_wrapped = ZeroizedKey::new(send_key);
