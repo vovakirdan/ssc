@@ -4,7 +4,7 @@ use flate2::{read::GzDecoder, write::GzEncoder, Compression};
 use hkdf::Hkdf;
 use once_cell::sync::Lazy;
 use rand::Rng;
-use ring::{aead, agreement, rand as ring_rand};
+use ring::{agreement, rand as ring_rand};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::io::{Read, Write};
@@ -19,7 +19,11 @@ use webrtc::{
         sdp::session_description::RTCSessionDescription, RTCPeerConnection,
     },
 };
-use zeroize::Zeroize;
+use zeroize::{Zeroize, ZeroizeOnDrop};
+use chacha20poly1305::{
+    aead::{Aead, KeyInit, Nonce},
+    ChaCha20Poly1305, Key,
+};
 
 /// ========== GLOBALS ==========
 static PEER: Lazy<Mutex<Option<Arc<RTCPeerConnection>>>> = Lazy::new(|| Mutex::new(None));
@@ -39,22 +43,38 @@ pub struct SdpPayload {
     pub ts: i64,
 }
 
+/// Безопасная обёртка для ключа с автоматической очисткой памяти
+#[derive(Zeroize, ZeroizeOnDrop)]
+struct ZeroizedKey {
+    key: [u8; 32],
+}
+
+impl ZeroizedKey {
+    fn new(key: [u8; 32]) -> Self {
+        Self { key }
+    }
+}
+
 struct CryptoCtx {
-    sealing: aead::LessSafeKey,
-    opening: aead::LessSafeKey,
+    sealing: ChaCha20Poly1305,
+    opening: ChaCha20Poly1305,
     send_n: u64,
     recv_n: u64,
     last_accepted_recv: u64, // Защита от replay - последний принятый recv sequence number
     sas: String,
+    // Храним ключи в безопасной обёртке для возможности очистки
+    _send_key: ZeroizedKey,
+    _recv_key: ZeroizedKey,
 }
 
 impl Drop for CryptoCtx {
     fn drop(&mut self) {
-        // Здесь мы не можем напрямую зануляться LessSafeKey, так как он не реализует Zeroize
-        // Но мы можем занулировать другие поля
+        // Зануляем все чувствительные данные
         self.send_n.zeroize();
         self.recv_n.zeroize();
+        self.last_accepted_recv.zeroize();
         self.sas.zeroize();
+        // ZeroizedKey автоматически очистится благодаря ZeroizeOnDrop
     }
 }
 
@@ -86,10 +106,10 @@ pub fn get_fingerprint() -> Option<String> {
     result
 }
 
-fn u64_to_nonce(v: u64) -> aead::Nonce {
+fn u64_to_nonce(v: u64) -> Nonce<ChaCha20Poly1305> {
     let mut b = [0u8; 12];
     b[4..].copy_from_slice(&v.to_be_bytes());
-    aead::Nonce::assume_unique_for_key(b)
+    *Nonce::<ChaCha20Poly1305>::from_slice(&b)
 }
 
 fn build_ctx(peer_pub: &[u8; 32]) -> CryptoCtx {
@@ -102,7 +122,7 @@ fn build_ctx(peer_pub: &[u8; 32]) -> CryptoCtx {
 
     // ----- общий секрет -----
     let peer_pub_key = agreement::UnparsedPublicKey::new(&agreement::X25519, peer_pub);
-    let shared =
+    let mut shared =
         agreement::agree_ephemeral(my_priv, &peer_pub_key, |secret| secret.to_vec()).unwrap();
 
     // ----- разделение ключей по направлениям -----
@@ -110,6 +130,10 @@ fn build_ctx(peer_pub: &[u8; 32]) -> CryptoCtx {
     let hk = Hkdf::<Sha256>::new(None, &shared);
     let mut okm = [0u8; 64];
     hk.expand(b"ssc-chat", &mut okm).unwrap();
+    
+    // Очищаем shared сразу после использования
+    shared.zeroize();
+    
     let (k1, k2) = okm.split_at(32);
 
     // Получаем собственный публичный ключ из глобальной переменной
@@ -119,20 +143,35 @@ fn build_ctx(peer_pub: &[u8; 32]) -> CryptoCtx {
         .expect("my_pub must be set before building crypto context");
 
     // Детерминированно выбираем ключи на основе публичных ключей
-    let (send_key, recv_key) = if my_pub < *peer_pub {
+    let (send_key_slice, recv_key_slice) = if my_pub < *peer_pub {
         (k1, k2)
     } else {
         (k2, k1)
     };
+    
+    // Копируем ключи в массивы
+    let mut send_key = [0u8; 32];
+    let mut recv_key = [0u8; 32];
+    send_key.copy_from_slice(send_key_slice);
+    recv_key.copy_from_slice(recv_key_slice);
 
     // ----- SAS на основе первого ключа -----
     let fp_raw = Sha256::digest(k1);
     let sas = hex::encode(&fp_raw[..6]); // PARANOID mode: 48 bits (6 bytes = 12 hex chars)
+    
+    // Очищаем okm после использования
+    okm.zeroize();
 
-    let sealing =
-        aead::LessSafeKey::new(aead::UnboundKey::new(&aead::CHACHA20_POLY1305, send_key).unwrap());
-    let opening =
-        aead::LessSafeKey::new(aead::UnboundKey::new(&aead::CHACHA20_POLY1305, recv_key).unwrap());
+    let sealing = ChaCha20Poly1305::new(&Key::from(send_key));
+    let opening = ChaCha20Poly1305::new(&Key::from(recv_key));
+    
+    // Создаём безопасные обёртки для ключей
+    let send_key_wrapped = ZeroizedKey::new(send_key);
+    let recv_key_wrapped = ZeroizedKey::new(recv_key);
+    
+    // Очищаем временные копии ключей
+    send_key.zeroize();
+    recv_key.zeroize();
 
     CryptoCtx {
         sealing,
@@ -141,6 +180,8 @@ fn build_ctx(peer_pub: &[u8; 32]) -> CryptoCtx {
         recv_n: 1,
         last_accepted_recv: 0, // Начинаем с 0, первое сообщение будет иметь sequence = 1
         sas: sas,
+        _send_key: send_key_wrapped,
+        _recv_key: recv_key_wrapped,
     }
 }
 
@@ -326,30 +367,29 @@ fn attach_dc(dc: &Arc<RTCDataChannel>) {
             }
 
             let nonce = u64_to_nonce(ctx.recv_n);
-            let mut buf = msg.data.to_vec();
+            let ciphertext = &msg.data[..];
 
-            if ctx
-                .opening
-                .open_in_place(nonce, aead::Aad::empty(), &mut buf)
-                .is_ok()
-            {
-                // Простая защита от replay: проверяем что sequence number больше последнего принятого
-                if ctx.recv_n > ctx.last_accepted_recv {
-                    // Обновляем последний принятый sequence number
-                    ctx.last_accepted_recv = ctx.recv_n;
-                    ctx.recv_n += 1;
+            match ctx.opening.decrypt(&nonce, ciphertext) {
+                Ok(plaintext) => {
+                    // Простая защита от replay: проверяем что sequence number больше последнего принятого
+                    if ctx.recv_n > ctx.last_accepted_recv {
+                        // Обновляем последний принятый sequence number
+                        ctx.last_accepted_recv = ctx.recv_n;
+                        ctx.recv_n += 1;
 
-                    let plain = String::from_utf8_lossy(&buf[..buf.len() - TAG_LEN]).to_string();
-                    // println!("Decrypted message: {}", plain);
-                    emit_message(&plain);
-                } else {
-                    // println!(
-                    //     "Replay attack detected: received seq {} <= last accepted seq {}",
-                    //     ctx.recv_n, ctx.last_accepted_recv
-                    // );
+                        let plain = String::from_utf8_lossy(&plaintext).to_string();
+                        // println!("Decrypted message: {}", plain);
+                        emit_message(&plain);
+                    } else {
+                        // println!(
+                        //     "Replay attack detected: received seq {} <= last accepted seq {}",
+                        //     ctx.recv_n, ctx.last_accepted_recv
+                        // );
+                    }
                 }
-            } else {
-                // println!("Failed to decrypt message with seq {}", ctx.recv_n);
+                Err(_) => {
+                    // println!("Failed to decrypt message with seq {}", ctx.recv_n);
+                }
             }
         } else {
             // println!("No crypto context available for message decryption");
@@ -425,29 +465,35 @@ pub async fn send_text(text: String) -> bool {
     let dc = { DATA_CH.lock().unwrap().as_ref().cloned() };
     if let Some(dc) = dc {
         // Получаем данные из мьютекса и освобождаем его
-        let buf = {
+        let result = {
             let mut crypto_guard = CRYPTO.lock().unwrap();
             if let Some(ref mut ctx) = *crypto_guard {
                 let seq_num = ctx.send_n;
                 let nonce = u64_to_nonce(seq_num);
                 ctx.send_n += 1;
 
-                let mut buf = text.into_bytes();
-                ctx.sealing
-                    .seal_in_place_append_tag(nonce, aead::Aad::empty(), &mut buf)
-                    .unwrap();
-
-                // println!("Encrypted message with seq {}, length: {}", seq_num, buf.len());
-                buf
+                let plaintext = text.into_bytes();
+                match ctx.sealing.encrypt(&nonce, plaintext.as_ref()) {
+                    Ok(ciphertext) => {
+                        // println!("Encrypted message with seq {}, length: {}", seq_num, ciphertext.len());
+                        Some(ciphertext)
+                    }
+                    Err(_) => {
+                        // println!("Encryption failed");
+                        None
+                    }
+                }
             } else {
                 // println!("No crypto context available for sending");
-                return false;
+                None
             }
         }; // мьютекс освобождается здесь
 
-        let result = dc.send(&Bytes::from(buf)).await.is_ok();
-        // println!("Send result: {}", result);
-        return result;
+        if let Some(ciphertext) = result {
+            let send_result = dc.send(&Bytes::from(ciphertext)).await.is_ok();
+            // println!("Send result: {}", send_result);
+            return send_result;
+        }
     }
     // println!("No data channel available for sending");
     false
