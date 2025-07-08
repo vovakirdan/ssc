@@ -1,6 +1,5 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 
 type Props = { 
   onConfirm: () => void; 
@@ -12,15 +11,25 @@ export default function FingerprintModal({ onConfirm, onCancel }: Props) {
 //   const [remoteFp, setRemoteFp] = useState<string>();
   const [checked, setChecked]   = useState(false);
 
-  // Ждем события подключения и запрашиваем fingerprint
+  // Проверяем готовность соединения один раз при монтировании
   useEffect(() => {
-    const un = listen("ssc-connected", () => {
-      // Небольшая задержка для гарантии, что SAS установлен
-      setTimeout(() => {
-        invoke<string>("get_fingerprint").then(setLocalFp).catch(console.error);
-      }, 200);
-    });
-    return () => { un.then(f => f()); };
+    const checkConnection = async () => {
+      try {
+        const connected = await invoke<boolean>("is_connected");
+        
+        if (connected) {
+          const fp = await invoke<string>("get_fingerprint");
+          
+          if (fp && fp.trim() !== "") {
+            setLocalFp(fp);
+          }
+        }
+      } catch (error) {
+        console.error("Connection check failed:", error);
+      }
+    };
+    
+    checkConnection();
   }, []);
 
   return (
@@ -41,7 +50,7 @@ export default function FingerprintModal({ onConfirm, onCancel }: Props) {
         <div style={{display: 'flex', gap: 12, marginTop: 16, justifyContent: 'center'}}>
           <button className="main-btn" style={{background: '#d32f2f'}}
                   onClick={onCancel}>
-            Это не так. Коды не совпадают
+            Коды не совпадают
           </button>
           <button className="main-btn"
                   disabled={!checked} onClick={onConfirm}>

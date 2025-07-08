@@ -50,15 +50,21 @@ const Chat = ({ onBack }: ChatProps) => {
         isOwn: false
       }]);
     });
+    
     // Слушаем событие отключения собеседника
     const unDisc = listen("ssc-disconnected", () => {
       setDisconnected(true);
       // Показываем уведомление
       toast.error('Собеседник отключился');
     });
+    
     return () => {
-      unMsg.then(f => f());
-      unDisc.then(f => f());
+      unMsg.then(f => {
+        if (typeof f === 'function') f();
+      });
+      unDisc.then(f => {
+        if (typeof f === 'function') f();
+      });
     };
   }, []);
 

@@ -77,8 +77,12 @@ fn random_id() -> String {
 }
 
 pub fn get_fingerprint() -> Option<String> {
-    let result = CRYPTO.lock().unwrap().as_ref().map(|c| c.sas.clone());
-    // println!("get_fingerprint called, result: {:?}", result); // Отладочная информация
+    let crypto_guard = CRYPTO.lock().unwrap();
+    let result = crypto_guard.as_ref().map(|c| {
+        // println!("Found crypto context with SAS: {}", c.sas);
+        c.sas.clone()
+    });
+    // println!("get_fingerprint called, crypto exists: {}, result: {:?}", crypto_guard.is_some(), result); // Отладочная информация
     result
 }
 
@@ -167,8 +171,13 @@ fn dec(s: &str) -> SdpPayload {
 }
 
 fn emit_state(evt: &str) {
+    // println!("emit_state called with event: {}", evt); // Отладочная информация
     if let Some(app) = APP.lock().unwrap().clone() {
-        let _ = app.emit(evt, ());
+        // println!("APP handle exists, emitting event: {}", evt); // Отладочная информация
+        let _result = app.emit(evt, ());
+        // println!("Emit result: {:?}", result); // Отладочная информация
+    } else {
+        // println!("APP handle is None, cannot emit event: {}", evt); // Отладочная информация
     }
 }
 
@@ -177,6 +186,8 @@ fn emit_connected() {
 }
 
 fn emit_disconnected() {
+    // println!("emit_disconnected called - clearing all state"); // Отладочная информация
+    // println!("Clearing CRYPTO context in emit_disconnected");
     *CRYPTO.lock().unwrap() = None;
     *MY_PRIV.lock().unwrap() = None;
     *MY_PUB.lock().unwrap() = None;
@@ -229,7 +240,14 @@ async fn new_peer(initiator: bool) -> Arc<RTCPeerConnection> {
 
 /// общий обработчик data-channel
 fn attach_dc(dc: &Arc<RTCDataChannel>) {
-    // println!("attach_dc called"); // Отладочная информация
+    // println!("attach_dc called - clearing old state"); // Отладочная информация
+    
+    // Очищаем старое состояние перед созданием нового соединения
+    // println!("Clearing CRYPTO context in attach_dc");
+    *CRYPTO.lock().unwrap() = None;
+    *MY_PRIV.lock().unwrap() = None;
+    *MY_PUB.lock().unwrap() = None;
+    
     {
         *DATA_CH.lock().unwrap() = Some(dc.clone());
     }
@@ -252,7 +270,7 @@ fn attach_dc(dc: &Arc<RTCDataChannel>) {
                 let dc = dc.clone();
                 async move {
                     let _result = dc.send(&Bytes::from(my_pub.as_ref().to_vec())).await;
-                    // println!("Send result: {:?}", result); // Отладочная информация
+                    // println!("Sent pub key: {}", hex::encode(my_pub.as_ref())); // Отладочная информация
                 }
             });
             Box::pin(async {})
@@ -267,6 +285,12 @@ fn attach_dc(dc: &Arc<RTCDataChannel>) {
             let peer_pub = <[u8; 32]>::try_from(&msg.data[..32]).unwrap();
             // println!("Received pub key: {}", hex::encode(&peer_pub)); // Отладочная информация
 
+            // Проверяем, не создали ли мы уже криптографический контекст
+            if CRYPTO.lock().unwrap().is_some() {
+                // println!("Crypto context already exists, skipping..."); // Отладочная информация
+                return Box::pin(async {});
+            }
+
             // Строим криптографический контекст
             let ctx = build_ctx(&peer_pub);
             // println!("SAS generated: {}", ctx.sas); // Отладочная информация
@@ -274,7 +298,19 @@ fn attach_dc(dc: &Arc<RTCDataChannel>) {
 
             // Всегда отправляем событие подключения после установки криптографического контекста
             // println!("Crypto context established, sending connected event"); // Отладочная информация
+            
+            // Проверим, что fingerprint доступен сразу после создания контекста
+            let _test_fp = get_fingerprint();
+            // println!("Fingerprint immediately after context creation: {:?}", test_fp);
+            
+            // Проверим APP handle перед отправкой события
+            let _app_exists = APP.lock().unwrap().is_some();
+            // println!("APP handle exists before emit_connected: {}", app_exists);
+            
+            // Отправляем событие подключения
+            // println!("Sending ssc-connected event immediately");
             emit_connected();
+            
             return Box::pin(async {});
         }
 
@@ -282,6 +318,7 @@ fn attach_dc(dc: &Arc<RTCDataChannel>) {
         let mut lock = CRYPTO.lock().unwrap();
         if let Some(ref mut ctx) = *lock {
             if msg.data.len() < TAG_LEN {
+                // println!("Message too short: {} < {}", msg.data.len(), TAG_LEN);
                 return Box::pin(async {});
             }
 
@@ -300,14 +337,19 @@ fn attach_dc(dc: &Arc<RTCDataChannel>) {
                     ctx.recv_n += 1;
 
                     let plain = String::from_utf8_lossy(&buf[..buf.len() - TAG_LEN]).to_string();
+                    // println!("Decrypted message: {}", plain);
                     emit_message(&plain);
                 } else {
-                    println!(
-                        "Replay attack detected: received seq {} <= last accepted seq {}",
-                        ctx.recv_n, ctx.last_accepted_recv
-                    );
+                    // println!(
+                    //     "Replay attack detected: received seq {} <= last accepted seq {}",
+                    //     ctx.recv_n, ctx.last_accepted_recv
+                    // );
                 }
+            } else {
+                // println!("Failed to decrypt message with seq {}", ctx.recv_n);
             }
+        } else {
+            // println!("No crypto context available for message decryption");
         }
         Box::pin(async {})
     }));
@@ -369,8 +411,14 @@ pub async fn set_answer(encoded: String) -> bool {
     }
 }
 
+/// проверка готовности соединения
+pub fn is_connected() -> bool {
+    CRYPTO.lock().unwrap().is_some()
+}
+
 /// текст по каналу
 pub async fn send_text(text: String) -> bool {
+    // println!("send_text called with: {}", text);
     let dc = { DATA_CH.lock().unwrap().as_ref().cloned() };
     if let Some(dc) = dc {
         // Получаем данные из мьютекса и освобождаем его
@@ -386,14 +434,19 @@ pub async fn send_text(text: String) -> bool {
                     .seal_in_place_append_tag(nonce, aead::Aad::empty(), &mut buf)
                     .unwrap();
 
+                // println!("Encrypted message with seq {}, length: {}", seq_num, buf.len());
                 buf
             } else {
+                // println!("No crypto context available for sending");
                 return false;
             }
         }; // мьютекс освобождается здесь
 
-        return dc.send(&Bytes::from(buf)).await.is_ok();
+        let result = dc.send(&Bytes::from(buf)).await.is_ok();
+        // println!("Send result: {}", result);
+        return result;
     }
+    // println!("No data channel available for sending");
     false
 }
 
@@ -412,6 +465,7 @@ pub async fn disconnect() {
     }
 
     // очищаем криптографический контекст и ключи
+    // println!("Clearing CRYPTO context in disconnect");
     *CRYPTO.lock().unwrap() = None;
     *MY_PRIV.lock().unwrap() = None;
     *MY_PUB.lock().unwrap() = None;

@@ -30,6 +30,11 @@ pub fn get_fingerprint() -> Option<String> {
 }
 
 #[command]
+pub fn is_connected() -> bool {
+    webrtc_peer::is_connected()
+}
+
+#[command]
 pub async fn disconnect() {
     webrtc_peer::disconnect().await
 }
