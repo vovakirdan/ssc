@@ -19,12 +19,14 @@ use webrtc::{
         sdp::session_description::RTCSessionDescription, RTCPeerConnection,
     },
 };
+use zeroize::Zeroize;
 
 /// ========== GLOBALS ==========
 static PEER: Lazy<Mutex<Option<Arc<RTCPeerConnection>>>> = Lazy::new(|| Mutex::new(None));
 static DATA_CH: Lazy<Mutex<Option<Arc<RTCDataChannel>>>> = Lazy::new(|| Mutex::new(None));
 static CRYPTO: Lazy<Mutex<Option<CryptoCtx>>> = Lazy::new(|| Mutex::new(None));
 static MY_PRIV: Lazy<Mutex<Option<agreement::EphemeralPrivateKey>>> = Lazy::new(|| Mutex::new(None));
+static MY_PUB: Lazy<Mutex<Option<[u8; 32]>>> = Lazy::new(|| Mutex::new(None));
 pub static APP: Lazy<Mutex<Option<AppHandle>>> = Lazy::new(|| Mutex::new(None));
 
 const TAG_LEN: usize = 16;
@@ -43,6 +45,17 @@ struct CryptoCtx {
     recv_n: u64,
     last_accepted_recv: u64, // Защита от replay - последний принятый recv sequence number
     sas : String,
+    my_pub: [u8; 32],
+}
+
+impl Drop for CryptoCtx {
+    fn drop(&mut self) {
+        // Здесь мы не можем напрямую зануляться LessSafeKey, так как он не реализует Zeroize
+        // Но мы можем занулировать другие поля
+        self.send_n.zeroize();
+        self.recv_n.zeroize();
+        self.sas.zeroize();
+    }
 }
 
 /// ========== HELPERS ==========
@@ -75,7 +88,7 @@ fn u64_to_nonce(v: u64) -> aead::Nonce {
     aead::Nonce::assume_unique_for_key(b)
 }
 
-fn build_ctx(peer_pub: &[u8; 32]) -> CryptoCtx {
+fn build_ctx(peer_pub: &[u8; 32], my_pub: &[u8; 32]) -> CryptoCtx {
     // ----- свой ключ -----
     let my_priv = MY_PRIV.lock().unwrap().take().expect("private key must exist during key-exchange");
 
@@ -88,17 +101,26 @@ fn build_ctx(peer_pub: &[u8; 32]) -> CryptoCtx {
     )
     .unwrap();
 
-    // ----- ключ шифрования -----
-    let hk  = Hkdf::<Sha256>::new(None, &shared);
-    let mut key = [0u8; 32];
-    hk.expand(b"ssc-chat", &mut key).unwrap();
+    // ----- разделение ключей по направлениям -----
+    // Получаем 64 байта из HKDF для двух ключей
+    let hk = Hkdf::<Sha256>::new(None, &shared);
+    let mut okm = [0u8; 64];
+    hk.expand(b"ssc-chat", &mut okm).unwrap();
+    let (k1, k2) = okm.split_at(32);
 
-    // ----- SAS -----
-    let fp_raw = Sha256::digest(&key);
-    let sas = hex::encode(&fp_raw[..4]);
+    // Детерминированно выбираем ключи на основе публичных ключей
+    let (send_key, recv_key) = if my_pub < peer_pub {
+        (k1, k2)
+    } else {
+        (k2, k1)
+    };
 
-    let sealing = aead::LessSafeKey::new(aead::UnboundKey::new(&aead::CHACHA20_POLY1305, &key).unwrap());
-    let opening = aead::LessSafeKey::new(aead::UnboundKey::new(&aead::CHACHA20_POLY1305, &key).unwrap());
+    // ----- SAS на основе первого ключа -----
+    let fp_raw = Sha256::digest(k1);
+    let sas = hex::encode(&fp_raw[..6]); // PARANOID mode: 48 bits (6 bytes = 12 hex chars)
+
+    let sealing = aead::LessSafeKey::new(aead::UnboundKey::new(&aead::CHACHA20_POLY1305, send_key).unwrap());
+    let opening = aead::LessSafeKey::new(aead::UnboundKey::new(&aead::CHACHA20_POLY1305, recv_key).unwrap());
 
     CryptoCtx { 
         sealing, 
@@ -107,6 +129,7 @@ fn build_ctx(peer_pub: &[u8; 32]) -> CryptoCtx {
         recv_n: 1, 
         last_accepted_recv: 0, // Начинаем с 0, первое сообщение будет иметь sequence = 1
         sas : sas,
+        my_pub: *my_pub,
     }
 }
 
@@ -149,6 +172,7 @@ fn emit_connected() {
 fn emit_disconnected() {
     *CRYPTO.lock().unwrap() = None;
     *MY_PRIV.lock().unwrap() = None;
+    *MY_PUB.lock().unwrap() = None;
     emit_state("ssc-disconnected");
 }
 
@@ -170,7 +194,9 @@ async fn new_peer(initiator: bool) -> Arc<RTCPeerConnection> {
 
     pc.on_peer_connection_state_change(Box::new(|st: RTCPeerConnectionState| {
         match st {
-            RTCPeerConnectionState::Connected => emit_connected(),
+            RTCPeerConnectionState::Connected => {
+                // Не отправляем событие подключения здесь, ждем установки криптографического контекста
+            },
             RTCPeerConnectionState::Disconnected
             | RTCPeerConnectionState::Failed
             | RTCPeerConnectionState::Closed => emit_disconnected(),
@@ -205,7 +231,9 @@ fn attach_dc(dc: &Arc<RTCDataChannel>) {
     let rng = ring_rand::SystemRandom::new();
     let my_priv = agreement::EphemeralPrivateKey::generate(&agreement::X25519, &rng).unwrap();
     let my_pub = my_priv.compute_public_key().unwrap();
+    let my_pub_bytes = <[u8; 32]>::try_from(my_pub.as_ref()).unwrap();
     *MY_PRIV.lock().unwrap() = Some(my_priv);
+    *MY_PUB.lock().unwrap() = Some(my_pub_bytes);
     // println!("Generated pub key: {}", hex::encode(my_pub.as_ref())); // Отладочная информация
 
     // Отправляем наш pub-key когда data channel открыт
@@ -216,14 +244,8 @@ fn attach_dc(dc: &Arc<RTCDataChannel>) {
             tauri::async_runtime::spawn({
                 let dc = dc.clone();
                 async move {
-                    let result = dc.send(&Bytes::from(my_pub.as_ref().to_vec())).await;
+                    let _result = dc.send(&Bytes::from(my_pub.as_ref().to_vec())).await;
                     // println!("Send result: {:?}", result); // Отладочная информация
-                    
-                    // После отправки pub-key проверяем, есть ли у нас уже криптографический контекст
-                    if CRYPTO.lock().unwrap().is_some() {
-                        // println!("We already have crypto context, sending connected event"); // Отладочная информация
-                        emit_connected();
-                    }
                 }
             });
             Box::pin(async {})
@@ -238,18 +260,17 @@ fn attach_dc(dc: &Arc<RTCDataChannel>) {
             let peer_pub = <[u8;32]>::try_from(&msg.data[..32]).unwrap();
             // println!("Received pub key: {}", hex::encode(&peer_pub)); // Отладочная информация
             
+            // Получаем собственный публичный ключ
+            let my_pub = MY_PUB.lock().unwrap().expect("my_pub must be set before receiving peer's pub key");
+            
             // Строим криптографический контекст
-            let ctx = build_ctx(&peer_pub);
+            let ctx = build_ctx(&peer_pub, &my_pub);
             // println!("SAS generated: {}", ctx.sas); // Отладочная информация
             *CRYPTO.lock().unwrap() = Some(ctx);
             
-            // Отправляем событие подключения только если у нас есть приватный ключ (мы уже отправили свой pub-key)
-            if MY_PRIV.lock().unwrap().is_none() {
-                // println!("Sending connected event"); // Отладочная информация
-                emit_connected();
-            } else {
-                // println!("Waiting for our pub-key to be sent before emitting connected"); // Отладочная информация
-            }
+            // Всегда отправляем событие подключения после установки криптографического контекста
+            // println!("Crypto context established, sending connected event"); // Отладочная информация
+            emit_connected();
             return Box::pin(async{});
         }
     
@@ -375,9 +396,10 @@ pub async fn disconnect() {
         let _ = pc.close().await;
     }
     
-    // очищаем криптографический контекст и приватный ключ
+    // очищаем криптографический контекст и ключи
     *CRYPTO.lock().unwrap() = None;
     *MY_PRIV.lock().unwrap() = None;
+    *MY_PUB.lock().unwrap() = None;
     
     // отправляем событие отключения
     emit_disconnected();
