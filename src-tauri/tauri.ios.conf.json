@@ -1,0 +1,8 @@
+{
+  "bundle": {
+    "iOS": {
+      "minimumSystemVersion": "13.0",
+      "bundleVersion": "0.1.0"
+    }
+  }
+}
