@@ -105,7 +105,7 @@ fn build_ctx(peer_pub: &[u8; 32], my_pub: &[u8; 32]) -> CryptoCtx {
 
     // ----- SAS на основе первого ключа -----
     let fp_raw = Sha256::digest(k1);
-    let sas = hex::encode(&fp_raw[..4]);
+    let sas = hex::encode(&fp_raw[..6]); // PARANOID mode: 48 bits (6 bytes = 12 hex chars)
 
     let sealing = aead::LessSafeKey::new(aead::UnboundKey::new(&aead::CHACHA20_POLY1305, send_key).unwrap());
     let opening = aead::LessSafeKey::new(aead::UnboundKey::new(&aead::CHACHA20_POLY1305, recv_key).unwrap());
@@ -231,7 +231,7 @@ fn attach_dc(dc: &Arc<RTCDataChannel>) {
             tauri::async_runtime::spawn({
                 let dc = dc.clone();
                 async move {
-                    let result = dc.send(&Bytes::from(my_pub.as_ref().to_vec())).await;
+                    let _result = dc.send(&Bytes::from(my_pub.as_ref().to_vec())).await;
                     // println!("Send result: {:?}", result); // Отладочная информация
                 }
             });
