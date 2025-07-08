@@ -43,6 +43,7 @@ struct CryptoCtx {
     opening: aead::LessSafeKey,
     send_n: u64,
     recv_n: u64,
+    last_accepted_recv: u64, // Защита от replay - последний принятый recv sequence number
     sas : String,
     my_pub: [u8; 32],
 }
@@ -124,9 +125,10 @@ fn build_ctx(peer_pub: &[u8; 32], my_pub: &[u8; 32]) -> CryptoCtx {
     CryptoCtx { 
         sealing, 
         opening, 
-        send_n: 0, 
-        recv_n: 0, 
-        sas: sas,
+        send_n: 1, 
+        recv_n: 1, 
+        last_accepted_recv: 0, // Начинаем с 0, первое сообщение будет иметь sequence = 1
+        sas : sas,
         my_pub: *my_pub,
     }
 }
@@ -277,12 +279,21 @@ fn attach_dc(dc: &Arc<RTCDataChannel>) {
         if let Some(ref mut ctx) = *lock {
             if msg.data.len() < TAG_LEN { return Box::pin(async{}) }
     
-            let nonce = u64_to_nonce(ctx.recv_n); ctx.recv_n += 1;
+            let nonce = u64_to_nonce(ctx.recv_n); 
             let mut buf = msg.data.to_vec();
     
             if ctx.opening.open_in_place(nonce, aead::Aad::empty(), &mut buf).is_ok() {
-                let plain = String::from_utf8_lossy(&buf[..buf.len()-TAG_LEN]).to_string();
-                emit_message(&plain);
+                // Простая защита от replay: проверяем что sequence number больше последнего принятого
+                if ctx.recv_n > ctx.last_accepted_recv {
+                    // Обновляем последний принятый sequence number
+                    ctx.last_accepted_recv = ctx.recv_n;
+                    ctx.recv_n += 1;
+                    
+                    let plain = String::from_utf8_lossy(&buf[..buf.len()-TAG_LEN]).to_string();
+                    emit_message(&plain);
+                } else {
+                    println!("Replay attack detected: received seq {} <= last accepted seq {}", ctx.recv_n, ctx.last_accepted_recv);
+                }
             }
         }
         Box::pin(async{})
@@ -353,7 +364,8 @@ pub async fn send_text(text: String) -> bool {
         let buf = {
             let mut crypto_guard = CRYPTO.lock().unwrap();
             if let Some(ref mut ctx) = *crypto_guard {
-                let nonce = u64_to_nonce(ctx.send_n); 
+                let seq_num = ctx.send_n;
+                let nonce = u64_to_nonce(seq_num); 
                 ctx.send_n += 1;
 
                 let mut buf = text.into_bytes();
