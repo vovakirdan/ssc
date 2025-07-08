@@ -94,7 +94,7 @@ fn build_ctx(peer_pub: &[u8; 32]) -> CryptoCtx {
 
     // ----- SAS -----
     let fp_raw = Sha256::digest(&key);
-    let sas = hex::encode(&fp_raw[..4]);
+    let sas = hex::encode(&fp_raw[..6]); // PARANOID mode: 48 bits (6 bytes = 12 hex chars)
 
     let sealing = aead::LessSafeKey::new(aead::UnboundKey::new(&aead::CHACHA20_POLY1305, &key).unwrap());
     let opening = aead::LessSafeKey::new(aead::UnboundKey::new(&aead::CHACHA20_POLY1305, &key).unwrap());
