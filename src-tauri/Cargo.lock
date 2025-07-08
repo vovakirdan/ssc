@@ -4131,6 +4131,7 @@ dependencies = [
  "tauri-plugin-opener",
  "tokio",
  "webrtc",
+ "zeroize",
 ]
 
 [[package]]
