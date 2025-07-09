@@ -5,6 +5,12 @@ all: dev, build
 build:
 	npm run tauri build
 
+build-ios:
+	npm run tauri ios build
+
+build-android-apk:
+	npm run tauri android build -- --apk
+
 dev:
 	npm run tauri dev
 
