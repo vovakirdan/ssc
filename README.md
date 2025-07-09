@@ -1,5 +1,7 @@
 # ZeroID: Absolutely Secret Chat
 
+![Rust](https://img.shields.io/badge/-Rust-000000?style=flat-square&logo=rust)
+
 ## [🇷🇺](./README.ru.md)
 
 **ZeroID** is an absolutely secret chat for secure communication without registration, authorization, or tracking. Your device is the server, so no one can access your correspondence or message history.
