@@ -270,6 +270,9 @@ async fn new_peer(initiator: bool) -> Arc<RTCPeerConnection> {
     let api = APIBuilder::new().build();
     let pc = Arc::new(api.new_peer_connection(rtc_config()).await.unwrap());
 
+    // делаем копию для обработчика состояний
+    let pc_state = pc.clone();
+
     pc.on_peer_connection_state_change(Box::new(move |st: RTCPeerConnectionState| {
             log(&format!("Peer connection state changed to: {:?}", st));
             
@@ -302,22 +305,29 @@ async fn new_peer(initiator: bool) -> Arc<RTCPeerConnection> {
                     }
 
                     // ставим отложенную проверку
-                    let handle = tauri::async_runtime::spawn(async move {
-                        log(&format!("Grace period started, waiting {} seconds", GRACE_PERIOD.as_secs()));
-                        sleep(GRACE_PERIOD).await;
-                        
-                        // Проверяем, есть ли криптографический контекст после grace period
-                        let crypto_exists = CRYPTO.lock().unwrap().is_some();
-                        log(&format!("Grace period ended, crypto context exists: {}", crypto_exists));
-                        
-                        if !crypto_exists {
-                            log("No crypto context after grace period - emitting disconnected");
-                            emit_disconnected();
-                        } else {
-                            log("Crypto context exists after grace period - keeping connection");
+                    let handle = tauri::async_runtime::spawn({
+                        let pc = pc_state.clone();    // используем копию, а не исходный pc
+                        async move {
+                            log(&format!("Grace period started, waiting {} s", GRACE_PERIOD.as_secs()));
+                            sleep(GRACE_PERIOD).await;
+                    
+                            let state_now = pc.connection_state();
+                            let crypto_exists = CRYPTO.lock().unwrap().is_some();
+                            log(&format!(
+                                "Grace over ➜ state={:?}, crypto_exists={}",
+                                state_now, crypto_exists
+                            ));
+                    
+                            // если соединение так и не восстановилось — рвём, даже если ключи есть
+                            if state_now != RTCPeerConnectionState::Connected {
+                                emit_disconnected();
+                            } else {
+                                log("Connection recovered during grace period");
+                            }
                         }
                     });
                     *DISCONNECT_TASK.lock().unwrap() = Some(handle);
+                    
                 }
 
                 RTCPeerConnectionState::Closed => {
