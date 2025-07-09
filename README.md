@@ -40,11 +40,53 @@ Android and iOS support is planned for the future.
 
 ## Screenshots 📸
 
-| Welcome Screen | Signature Exchange (QR Codes) | Main Chat |
-| -------------- | ----------------------------- | --------- |
-|                |                               |           |
+The application interface is the same across all platforms.
 
-*(GIF demonstration will be added later)*
+### 🏠 Welcome Screen
+![Welcome Screen](screenshots/win_welcome.png)
+
+Welcome to ZeroID! Here you can start secure communication. Choose a connection method:
+- **Create QR Code** — to initiate a connection
+- **Scan QR Code** — to connect to your peer
+
+### Create/Accept Offer
+
+At this stage, you can create an offer or accept an offer from your peer.
+![Create/Accept Offer](screenshots/win_choose_way.png)
+
+### 🔗 Creating a QR Code
+![Creating QR Code](screenshots/android_generateQR.png)
+
+Create a unique QR code for your peer. This code contains encrypted information for establishing a secure connection. Show it to your peer for scanning.
+> You can also share the generated QR code link to establish a connection.
+
+### 📱 Scanning a QR Code
+![Scanning QR Code](screenshots/win_scanQR.png)
+
+Scan the QR code or enter the received offer created by your peer. The app will automatically establish a secure peer-to-peer connection.
+
+### Sending the Answer
+![Sending the Answer](screenshots/win_generate_answer.png)
+
+After scanning the QR code or entering the offer, the app will automatically generate a response message with the encrypted answer. Send it to the peer who invited you.
+
+### 🔐 Fingerprint Verification
+![Fingerprint Verification](screenshots/win_check_fingerprint.png)
+
+After the connection is established, compare the security fingerprints (SAS) with your peer. If they match, the connection is protected from "man-in-the-middle" attacks.
+
+### 💬 Secure Chat
+![Main Chat](screenshots/win_chat.png)
+![Android](screenshots/android_chat.png)
+
+Now you can chat in absolutely secure mode! All messages are end-to-end encrypted using ChaCha20-Poly1305. No servers, no message history.
+
+### 🔌 Disconnect
+![Disconnect](screenshots/android_disconnect.png)
+
+End the session with a single click. All encryption keys are automatically wiped from memory, ensuring complete security.
+
+ZeroID is also available on mobile devices with the same level of security and ease of use.
 
 ## Tech Stack 🛠️
 
