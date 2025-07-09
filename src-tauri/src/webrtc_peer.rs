@@ -1,5 +1,9 @@
 use base64::{engine::general_purpose, Engine as _};
 use bytes::Bytes;
+use chacha20poly1305::{
+    aead::{Aead, KeyInit, Nonce},
+    ChaCha20Poly1305, Key,
+};
 use flate2::{read::GzDecoder, write::GzEncoder, Compression};
 use hkdf::Hkdf;
 use once_cell::sync::Lazy;
@@ -22,10 +26,6 @@ use webrtc::{
     },
 };
 use zeroize::{Zeroize, ZeroizeOnDrop};
-use chacha20poly1305::{
-    aead::{Aead, KeyInit, Nonce},
-    ChaCha20Poly1305, Key,
-};
 
 /// ========== GLOBALS ==========
 static PEER: Lazy<Mutex<Option<Arc<RTCPeerConnection>>>> = Lazy::new(|| Mutex::new(None));
@@ -38,7 +38,8 @@ pub static APP: Lazy<Mutex<Option<AppHandle>>> = Lazy::new(|| Mutex::new(None));
 // Флаг для отслеживания того, что соединение уже было установлено
 static WAS_CONNECTED: Lazy<Mutex<bool>> = Lazy::new(|| Mutex::new(false));
 // Отложенный таск для graceful disconnect
-static DISCONNECT_TASK: Lazy<Mutex<Option<tauri::async_runtime::JoinHandle<()>>>> = Lazy::new(|| Mutex::new(None));
+static DISCONNECT_TASK: Lazy<Mutex<Option<tauri::async_runtime::JoinHandle<()>>>> =
+    Lazy::new(|| Mutex::new(None));
 
 const TAG_LEN: usize = 16;
 const GRACE_PERIOD: Duration = Duration::from_secs(10);
@@ -115,7 +116,11 @@ pub fn get_fingerprint() -> Option<String> {
         log(&format!("Found crypto context with SAS: {}", c.sas));
         c.sas.clone()
     });
-    log(&format!("get_fingerprint called, crypto exists: {}, result: {:?}", crypto_guard.is_some(), result));
+    log(&format!(
+        "get_fingerprint called, crypto exists: {}, result: {:?}",
+        crypto_guard.is_some(),
+        result
+    ));
     result
 }
 
@@ -143,10 +148,10 @@ fn build_ctx(peer_pub: &[u8; 32]) -> CryptoCtx {
     let hk = Hkdf::<Sha256>::new(None, &shared);
     let mut okm = [0u8; 64];
     hk.expand(b"ssc-chat", &mut okm).unwrap();
-    
+
     // Очищаем shared сразу после использования
     shared.zeroize();
-    
+
     let (k1, k2) = okm.split_at(32);
 
     // Получаем собственный публичный ключ из глобальной переменной
@@ -161,7 +166,7 @@ fn build_ctx(peer_pub: &[u8; 32]) -> CryptoCtx {
     } else {
         (k2, k1)
     };
-    
+
     // Копируем ключи в массивы
     let mut send_key = [0u8; 32];
     let mut recv_key = [0u8; 32];
@@ -171,17 +176,17 @@ fn build_ctx(peer_pub: &[u8; 32]) -> CryptoCtx {
     // ----- SAS на основе первого ключа -----
     let fp_raw = Sha256::digest(k1);
     let sas = hex::encode(&fp_raw[..6]); // PARANOID mode: 48 bits (6 bytes = 12 hex chars)
-    
+
     // Очищаем okm после использования
     okm.zeroize();
 
     let sealing = ChaCha20Poly1305::new(&Key::from(send_key));
     let opening = ChaCha20Poly1305::new(&Key::from(recv_key));
-    
+
     // Создаём безопасные обёртки для ключей
     let send_key_wrapped = ZeroizedKey::new(send_key);
     let recv_key_wrapped = ZeroizedKey::new(recv_key);
-    
+
     // Очищаем временные копии ключей
     send_key.zeroize();
     recv_key.zeroize();
@@ -274,77 +279,79 @@ async fn new_peer(initiator: bool) -> Arc<RTCPeerConnection> {
     let pc_state = pc.clone();
 
     pc.on_peer_connection_state_change(Box::new(move |st: RTCPeerConnectionState| {
-            log(&format!("Peer connection state changed to: {:?}", st));
-            
-            match st {
-                RTCPeerConnectionState::Connected => {
-                    log("Peer connection connected - canceling any pending disconnect task");
-                    // отменяем отложенный disconnect, если он был
-                    if let Some(handle) = DISCONNECT_TASK.lock().unwrap().take() {
-                        log("Aborting pending disconnect task");
-                        handle.abort();
-                    }
-                    
-                    // повторно дёргаем UI, если контекст уже готов
-                    let crypto_exists = CRYPTO.lock().unwrap().is_some();
-                    if crypto_exists {
-                        log("Crypto context exists - re-emitting connected event");
-                        emit_connected();
-                    } else {
-                        log("Peer connection connected - waiting for crypto context");
-                    }
+        log(&format!("Peer connection state changed to: {:?}", st));
+
+        match st {
+            RTCPeerConnectionState::Connected => {
+                log("Peer connection connected - canceling any pending disconnect task");
+                // отменяем отложенный disconnect, если он был
+                if let Some(handle) = DISCONNECT_TASK.lock().unwrap().take() {
+                    log("Aborting pending disconnect task");
+                    handle.abort();
                 }
 
-                RTCPeerConnectionState::Disconnected | RTCPeerConnectionState::Failed => {
-                    log(&format!("Peer connection {:?} - starting grace period", st));
-                    
-                    // уже ожидаем? – ничего не делаем
-                    if DISCONNECT_TASK.lock().unwrap().is_some() {
-                        log("Disconnect task already pending, ignoring");
-                        return Box::pin(async {});
-                    }
-
-                    // ставим отложенную проверку
-                    let handle = tauri::async_runtime::spawn({
-                        let pc = pc_state.clone();    // используем копию, а не исходный pc
-                        async move {
-                            log(&format!("Grace period started, waiting {} s", GRACE_PERIOD.as_secs()));
-                            sleep(GRACE_PERIOD).await;
-                    
-                            let state_now = pc.connection_state();
-                            let crypto_exists = CRYPTO.lock().unwrap().is_some();
-                            log(&format!(
-                                "Grace over ➜ state={:?}, crypto_exists={}",
-                                state_now, crypto_exists
-                            ));
-                    
-                            // если соединение так и не восстановилось — рвём, даже если ключи есть
-                            if state_now != RTCPeerConnectionState::Connected {
-                                emit_disconnected();
-                            } else {
-                                log("Connection recovered during grace period");
-                            }
-                        }
-                    });
-                    *DISCONNECT_TASK.lock().unwrap() = Some(handle);
-                    
-                }
-
-                RTCPeerConnectionState::Closed => {
-                    log("Peer connection closed - emitting disconnected immediately");
-                    // отменяем отложенный disconnect, если он был
-                    if let Some(handle) = DISCONNECT_TASK.lock().unwrap().take() {
-                        handle.abort();
-                    }
-                    emit_disconnected();
-                }
-                
-                _ => {
-                    log(&format!("Peer connection state: {:?} - ignoring", st));
+                // повторно дёргаем UI, если контекст уже готов
+                let crypto_exists = CRYPTO.lock().unwrap().is_some();
+                if crypto_exists {
+                    log("Crypto context exists - re-emitting connected event");
+                    emit_connected();
+                } else {
+                    log("Peer connection connected - waiting for crypto context");
                 }
             }
-            Box::pin(async {})
-        }));
+
+            RTCPeerConnectionState::Disconnected | RTCPeerConnectionState::Failed => {
+                log(&format!("Peer connection {:?} - starting grace period", st));
+
+                // уже ожидаем? – ничего не делаем
+                if DISCONNECT_TASK.lock().unwrap().is_some() {
+                    log("Disconnect task already pending, ignoring");
+                    return Box::pin(async {});
+                }
+
+                // ставим отложенную проверку
+                let handle = tauri::async_runtime::spawn({
+                    let pc = pc_state.clone(); // используем копию, а не исходный pc
+                    async move {
+                        log(&format!(
+                            "Grace period started, waiting {} s",
+                            GRACE_PERIOD.as_secs()
+                        ));
+                        sleep(GRACE_PERIOD).await;
+
+                        let state_now = pc.connection_state();
+                        let crypto_exists = CRYPTO.lock().unwrap().is_some();
+                        log(&format!(
+                            "Grace over ➜ state={:?}, crypto_exists={}",
+                            state_now, crypto_exists
+                        ));
+
+                        // если соединение так и не восстановилось — рвём, даже если ключи есть
+                        if state_now != RTCPeerConnectionState::Connected {
+                            emit_disconnected();
+                        } else {
+                            log("Connection recovered during grace period");
+                        }
+                    }
+                });
+                *DISCONNECT_TASK.lock().unwrap() = Some(handle);
+            }
+
+            RTCPeerConnectionState::Closed => {
+                log("Peer connection closed - emitting disconnected immediately");
+                // отменяем отложенный disconnect, если он был
+                if let Some(handle) = DISCONNECT_TASK.lock().unwrap().take() {
+                    handle.abort();
+                }
+                emit_disconnected();
+            }
+
+            _ => {
+                log(&format!("Peer connection state: {:?} - ignoring", st));
+            }
+        }
+        Box::pin(async {})
+    }));
 
     if initiator {
         let dc = pc
@@ -364,20 +371,20 @@ async fn new_peer(initiator: bool) -> Arc<RTCPeerConnection> {
 /// общий обработчик data-channel
 fn attach_dc(dc: &Arc<RTCDataChannel>) {
     log("attach_dc called - clearing old state");
-    
+
     // отменяем отложенный disconnect, если он был
     if let Some(handle) = DISCONNECT_TASK.lock().unwrap().take() {
         log("Aborting pending disconnect task in attach_dc");
         handle.abort();
     }
-    
+
     // Очищаем старое состояние перед созданием нового соединения
     log("Clearing CRYPTO context in attach_dc");
     *CRYPTO.lock().unwrap() = None;
     *MY_PRIV.lock().unwrap() = None;
     *MY_PUB.lock().unwrap() = None;
     *WAS_CONNECTED.lock().unwrap() = false;
-    
+
     {
         *DATA_CH.lock().unwrap() = Some(dc.clone());
     }
@@ -389,7 +396,10 @@ fn attach_dc(dc: &Arc<RTCDataChannel>) {
     let my_pub_bytes = <[u8; 32]>::try_from(my_pub.as_ref()).unwrap();
     *MY_PRIV.lock().unwrap() = Some(my_priv);
     *MY_PUB.lock().unwrap() = Some(my_pub_bytes);
-    log(&format!("Generated pub key: {}", hex::encode(my_pub.as_ref())));
+    log(&format!(
+        "Generated pub key: {}",
+        hex::encode(my_pub.as_ref())
+    ));
 
     // Отправляем наш pub-key когда data channel открыт
     dc.on_open(Box::new({
@@ -428,19 +438,25 @@ fn attach_dc(dc: &Arc<RTCDataChannel>) {
 
             // Всегда отправляем событие подключения после установки криптографического контекста
             log("Crypto context established, sending connected event");
-            
+
             // Проверим, что fingerprint доступен сразу после создания контекста
             let _test_fp = get_fingerprint();
-            log(&format!("Fingerprint immediately after context creation: {:?}", _test_fp));
-            
+            log(&format!(
+                "Fingerprint immediately after context creation: {:?}",
+                _test_fp
+            ));
+
             // Проверим APP handle перед отправкой события
             let _app_exists = APP.lock().unwrap().is_some();
-            log(&format!("APP handle exists before emit_connected: {}", _app_exists));
-            
+            log(&format!(
+                "APP handle exists before emit_connected: {}",
+                _app_exists
+            ));
+
             // Отправляем событие подключения
             log("Sending ssc-connected event immediately");
             emit_connected();
-            
+
             return Box::pin(async {});
         }
 
@@ -448,7 +464,11 @@ fn attach_dc(dc: &Arc<RTCDataChannel>) {
         let mut lock = CRYPTO.lock().unwrap();
         if let Some(ref mut ctx) = *lock {
             if msg.data.len() < TAG_LEN {
-                log(&format!("Message too short: {} < {}", msg.data.len(), TAG_LEN));
+                log(&format!(
+                    "Message too short: {} < {}",
+                    msg.data.len(),
+                    TAG_LEN
+                ));
                 return Box::pin(async {});
             }
 
@@ -467,11 +487,17 @@ fn attach_dc(dc: &Arc<RTCDataChannel>) {
                         log(&format!("Decrypted message: {}", plain));
                         emit_message(&plain);
                     } else {
-                        log(&format!("Replay attack detected: received seq {} <= last accepted seq {}", ctx.recv_n, ctx.last_accepted_recv));
+                        log(&format!(
+                            "Replay attack detected: received seq {} <= last accepted seq {}",
+                            ctx.recv_n, ctx.last_accepted_recv
+                        ));
                     }
                 }
                 Err(_) => {
-                    log(&format!("Failed to decrypt message with seq {}", ctx.recv_n));
+                    log(&format!(
+                        "Failed to decrypt message with seq {}",
+                        ctx.recv_n
+                    ));
                 }
             }
         } else {
@@ -583,7 +609,11 @@ pub async fn send_text(text: String) -> bool {
                 let plaintext = text.into_bytes();
                 match ctx.sealing.encrypt(&nonce, plaintext.as_ref()) {
                     Ok(ciphertext) => {
-                        log(&format!("Encrypted message with seq {}, length: {}", seq_num, ciphertext.len()));
+                        log(&format!(
+                            "Encrypted message with seq {}, length: {}",
+                            seq_num,
+                            ciphertext.len()
+                        ));
                         Some(ciphertext)
                     }
                     Err(_) => {
@@ -626,7 +656,7 @@ pub async fn disconnect() {
         log("Aborting pending disconnect task in manual disconnect");
         handle.abort();
     }
-    
+
     // очищаем криптографический контекст и ключи
     log("Clearing CRYPTO context in disconnect");
     *CRYPTO.lock().unwrap() = None;
