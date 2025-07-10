@@ -29,9 +29,10 @@ export const MessageBubble: FC<Props> = ({msg, index = 0}) => (
       ease: "easeInOut",
       delay: index * 0.05 // Небольшая задержка для stagger эффекта
     }}
+    className={`flex ${msg.isOwn ? 'justify-end' : 'justify-start'}`}
   >
     <Card
-      className={`max-w-[70%] p-3 ${
+      className={`max-w-[70%] p-3 rounded-2xl ${
         msg.isOwn
           ? 'bg-emerald-600 text-white'
           : 'bg-slate-700 text-white border-slate-600'

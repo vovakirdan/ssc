@@ -299,7 +299,7 @@ export default function Chat({onBack}: ChatProps) {
 
       {/* Messages - скроллируемая область */}
       <main className="flex-1 overflow-y-auto p-4 min-h-0">
-        <div className="max-w-4xl mx-auto space-y-4">
+        <div className="max-w-4xl mx-auto space-y-2 w-full">
           <AnimatePresence mode="popLayout">
             {messages.length === 0 ? (
               <motion.div
