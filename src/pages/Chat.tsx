@@ -9,6 +9,7 @@ import {useWindowSize} from 'react-use';
 
 import {Message, ConnectionStatus} from '@/components/chat/types';
 import {MessageBubble} from '@/components/chat/MessageBubble';
+import ShinyText from '@/components/text/ShinyText';
 
 interface ChatProps {
   onBack: () => void;
@@ -126,12 +127,29 @@ export default function Chat({onBack}: ChatProps) {
 
   const statusColor =
     status === 'connected'
-      ? 'emerald'
+      ? 'bg-emerald-500'
       : status === 'problem'
-      ? 'yellow'
+      ? 'bg-yellow-500'
       : status === 'recovering'
-      ? 'blue'
-      : 'red';
+      ? 'bg-blue-500'
+      : 'bg-red-500';
+
+  const statusBgClass = status === 'connected'
+    ? 'bg-emerald-500'
+    : status === 'problem'
+    ? 'bg-yellow-500'
+    : status === 'recovering'
+    ? 'bg-blue-500'
+    : 'bg-red-500';
+
+  const statusTextClass = status === 'connected'
+    ? 'text-emerald-400'
+    : status === 'problem'
+    ? 'text-yellow-400'
+    : status === 'recovering'
+    ? 'text-blue-400'
+    : 'text-red-400';
+
 
   return (
     <div className="min-h-screen flex flex-col bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
@@ -153,15 +171,17 @@ export default function Chat({onBack}: ChatProps) {
 
           {/* Connection indicator */}
           <div className="flex items-center space-x-2">
-            <div className={`w-3 h-3 rounded-full bg-${statusColor}-500 animate-pulse`} />
-            <span className={`text-sm text-${statusColor}-400`}>
-              {status === 'connected'
-                ? 'Подключено'
-                : status === 'problem'
-                ? 'Проблемы'
-                : status === 'recovering'
-                ? 'Восстановление'
-                : 'Отключено'}
+            <div className={`w-3 h-3 rounded-full ${statusBgClass} animate-pulse`} />
+            <span className={`text-sm ${statusTextClass}`}>
+              <ShinyText
+                text={status === 'connected'
+                  ? 'Подключено'
+                  : status === 'problem'
+                  ? 'Проблемы'
+                  : status === 'recovering'
+                  ? 'Восстановление'
+                  : 'Отключено'}
+              />
             </span>
           </div>
         </div>
@@ -170,7 +190,7 @@ export default function Chat({onBack}: ChatProps) {
       {/* Status banners */}
       {['problem', 'recovering', 'disconnected'].includes(status) && (
         <div
-          className={`bg-${statusColor}-500/80 text-white text-center py-2 font-semibold`}
+          className={`${statusColor} text-white text-center py-2 font-semibold`}
         >
           {status === 'problem'
             ? 'Проблемы с подключением'
