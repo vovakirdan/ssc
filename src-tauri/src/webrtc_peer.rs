@@ -291,6 +291,11 @@ fn emit_connection_recovered() {
     emit_state("ssc-connection-recovered");
 }
 
+fn emit_connection_failed() {
+    log("emit_connection_failed called - connection recovery failed");
+    emit_state("ssc-connection-failed");
+}
+
 async fn wait_ice(pc: &RTCPeerConnection) {
     let mut done = pc.gathering_complete_promise().await;
     done.recv().await;
@@ -357,9 +362,9 @@ async fn new_peer(initiator: bool) -> Arc<RTCPeerConnection> {
                             state_now, crypto_exists
                         ));
 
-                        // если соединение так и не восстановилось — рвём, даже если ключи есть
+                        // если соединение так и не восстановилось — отправляем событие неудачного восстановления
                         if state_now != RTCPeerConnectionState::Connected {
-                            emit_disconnected();
+                            emit_connection_failed();
                         } else {
                             log("Connection recovered during grace period");
                         }

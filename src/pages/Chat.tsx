@@ -18,13 +18,15 @@ interface ChatProps {
 
 export default function Chat({onBack}: ChatProps) {
   /* ---------- state ---------- */
-  const [messages, setMessages]           = useState<Message[]>([]);
-  const [newMessage, setNewMessage]       = useState<string>('');
-  const [sending, setSending]             = useState<boolean>(false);
-  const [status, setStatus]               = useState<ConnectionStatus>('connected');
-  const messagesEndRef                    = useRef<HTMLDivElement>(null);
-  const clearHistoryTimeoutRef            = useRef<NodeJS.Timeout | null>(null);
-  const unlistenersRef                    = useRef<UnlistenFn[]>([]);
+  const [messages, setMessages]               = useState<Message[]>([]);
+  const [newMessage, setNewMessage]           = useState<string>('');
+  const [sending, setSending]                 = useState<boolean>(false);
+  const [status, setStatus]                   = useState<ConnectionStatus>('connected');
+  const [finalDisconnect, setFinalDisconnect] = useState(false);
+  const finalDisconnectRef                    = useRef(false);
+  const messagesEndRef                        = useRef<HTMLDivElement>(null);
+  const clearHistoryTimeoutRef                = useRef<NodeJS.Timeout | null>(null);
+  const unlistenersRef                        = useRef<UnlistenFn[]>([]);
 
   /* ---------- helpers ---------- */
   const scrollToBottom = () =>
@@ -34,6 +36,8 @@ export default function Chat({onBack}: ChatProps) {
     setMessages([]);
     if (clearHistoryTimeoutRef.current) clearTimeout(clearHistoryTimeoutRef.current);
   };
+
+  const statusRef = useRef<ConnectionStatus>('connected');
 
   /* ---------- lifecycle ---------- */
   useEffect(() => {
@@ -50,27 +54,70 @@ export default function Chat({onBack}: ChatProps) {
       ]);
     });
 
-    register('ssc-connected', () => setStatus('connected'));
+    register('ssc-connected', () => {
+      setStatus('connected');
+      statusRef.current = 'connected';
+    });
     register('ssc-connection-problem', () => {
       setStatus('problem');
+      statusRef.current = 'problem';
       toast.warning('Проблемы с подключением');
     });
     register('ssc-connection-recovering', () => {
       setStatus('recovering');
+      statusRef.current = 'recovering';
       toast.info('Попытка восстановления соединения…');
-    });
+      // Не сбрасываем таймер очистки, если уже начался процесс финального отключения
+      if (clearHistoryTimeoutRef.current && !finalDisconnectRef.current) {
+        clearTimeout(clearHistoryTimeoutRef.current);
+        clearHistoryTimeoutRef.current = null;
+      }
+    });    
     register('ssc-connection-recovered', () => {
       setStatus('connected');
+      statusRef.current = 'connected';
+      setFinalDisconnect(false); // Сбрасываем флаг финального отключения
+      finalDisconnectRef.current = false;
       toast.success('Соединение восстановлено');
+    });
+    
+    // Обработчик для финального отключения после неудачных попыток восстановления
+    register('ssc-connection-failed', () => {
+      setStatus('disconnected');
+      statusRef.current = 'disconnected';
+      toast.error('Восстановление соединения не удалось');
+      
+      // Если таймер очистки еще не запущен, запускаем его
+      if (!clearHistoryTimeoutRef.current) {
+        clearHistoryTimeoutRef.current = setTimeout(() => {
+          if (statusRef.current === 'disconnected' && !finalDisconnectRef.current) {
+            clearHistory();
+            toast.info('История сообщений очищена');
+            setFinalDisconnect(true);
+            finalDisconnectRef.current = true;
+          }
+        }, 5000);
+      }
     });
     register('ssc-disconnected', () => {
       setStatus('disconnected');
+      statusRef.current = 'disconnected';
       toast.error('Собеседник отключился');
+      setFinalDisconnect(false);
+      finalDisconnectRef.current = false;
+    
+      if (clearHistoryTimeoutRef.current) clearTimeout(clearHistoryTimeoutRef.current);
+    
       clearHistoryTimeoutRef.current = setTimeout(() => {
-        clearHistory();
-        toast.info('История сообщений очищена');
-      }, 5_000);
-    });
+        // Проверяем актуальный статус через ref перед очисткой!
+        if (statusRef.current === 'disconnected' && !finalDisconnectRef.current) {
+          clearHistory();
+          toast.info('История сообщений очищена');
+          setFinalDisconnect(true);
+          finalDisconnectRef.current = true;
+        }
+      }, 5000);
+    });    
 
     return () => {
       unlistenersRef.current.forEach((un) => un());
@@ -80,6 +127,11 @@ export default function Chat({onBack}: ChatProps) {
 
   /* scroll down on new messages */
   useEffect(scrollToBottom, [messages]);
+
+  /* sync finalDisconnect state with ref */
+  useEffect(() => {
+    finalDisconnectRef.current = finalDisconnect;
+  }, [finalDisconnect]);
 
   /* ---------- actions ---------- */
   const handleBack = async () => {
