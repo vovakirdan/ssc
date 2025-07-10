@@ -6,7 +6,6 @@ import { Send, Shield, ArrowLeft } from 'lucide-react';
 import { toast } from 'sonner';
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import FingerprintModal from '@/components/FingerprintModal';
 
 interface ChatProps {
   onBack: () => void;
@@ -26,18 +25,6 @@ const Chat = ({ onBack }: ChatProps) => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   // Состояние для отслеживания отключения собеседника
   const [disconnected, setDisconnected] = useState(false);
-  // Состояние для подтверждения fingerprint'а
-  const [verified, setVerified] = useState(false);
-
-  // Функция для обработки отмены fingerprint'а
-  const handleFingerprintCancel = async () => {
-    try {
-      await invoke('disconnect');
-    } catch (error) {
-      console.error('Error disconnecting:', error);
-    }
-    onBack();
-  };
 
   // Слушаем события получения сообщений от Rust ядра
   useEffect(() => {
@@ -79,7 +66,6 @@ const Chat = ({ onBack }: ChatProps) => {
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
     
-    if (!verified) return; // блок до проверки fingerprint'а
     if (!newMessage.trim()) return;
 
     const messageText = newMessage.trim();
@@ -114,14 +100,7 @@ const Chat = ({ onBack }: ChatProps) => {
   };
 
   return (
-    <>
-      {!verified && <FingerprintModal 
-        onConfirm={() => setVerified(true)} 
-        onCancel={handleFingerprintCancel}
-      />}
-      
-      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex flex-col" 
-           style={{opacity: verified ? 1 : 0.3, pointerEvents: verified ? "auto" : "none"}}>
+    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex flex-col">
         {/* Header */}
         <div className="bg-slate-800/50 border-b border-slate-700 p-4">
         <div className="flex items-center justify-between max-w-4xl mx-auto">
@@ -208,7 +187,6 @@ const Chat = ({ onBack }: ChatProps) => {
         </form>
       </div>
     </div>
-    </>
   );
 };
 

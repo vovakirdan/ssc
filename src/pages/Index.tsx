@@ -3,8 +3,9 @@ import Welcome from './Welcome';
 import GenerateQR from './GenerateQR';
 import ScanQR from './ScanQR';
 import Chat from './Chat';
+import VerifyFingerprint from './VerifyFingerprint';
 
-type AppMode = 'welcome' | 'generate' | 'scan' | 'chat';
+type AppMode = 'welcome' | 'generate' | 'scan' | 'verify' | 'chat';
 
 const Index = () => {
   const [mode, setMode] = useState<AppMode>('welcome');
@@ -23,11 +24,18 @@ const Index = () => {
   };
 
   const handleConnected = () => {
-    setMode('chat');
+    setMode('verify');
   };
 
   if (mode === 'chat') {
     return <Chat onBack={() => setMode('welcome')} />;
+  }
+
+  if (mode === 'verify') {
+    return <VerifyFingerprint 
+      onConfirm={() => setMode('chat')} 
+      onCancel={() => setMode('welcome')} 
+    />;
   }
 
   if (mode === 'generate') {
