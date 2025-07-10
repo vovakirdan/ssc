@@ -10,7 +10,7 @@ import {useWindowSize} from 'react-use';
 import {Message, ConnectionStatus} from '@/components/chat/types';
 import {MessageBubble} from '@/components/chat/MessageBubble';
 import ShinyText from '@/components/text/ShinyText';
-import { AnimatePresence } from 'framer-motion';
+import { AnimatePresence, motion } from 'framer-motion';
 
 interface ChatProps {
   onBack: () => void;
@@ -34,7 +34,10 @@ export default function Chat({onBack}: ChatProps) {
 
   const clearHistory = () => {
     console.log('Очистка истории сообщений');
-    setMessages([]);
+    // Добавляем небольшую задержку для завершения анимации
+    setTimeout(() => {
+      setMessages([]);
+    }, 100);
     if (clearHistoryTimeoutRef.current) clearTimeout(clearHistoryTimeoutRef.current);
   };
 
@@ -293,21 +296,34 @@ export default function Chat({onBack}: ChatProps) {
       {/* Messages */}
       <main className="flex-1 overflow-y-auto p-4">
         <div className="max-w-4xl mx-auto space-y-4">
-          {messages.length === 0 ? (
-            <div className="text-center py-12">
-              <Shield className="w-12 h-12 text-slate-600 mx-auto mb-4" />
-              <p className="text-slate-400">
-                Соединение установлено! Начните общение.
-              </p>
-              <p className="text-slate-500 text-sm mt-2">
-                Все сообщения зашифрованы end-to-end
-              </p>
-            </div>
-          ) : (
-            <AnimatePresence>
-              {messages.map((m) => <MessageBubble key={m.id} msg={m} />)}
-            </AnimatePresence>
-          )}
+          <AnimatePresence mode="popLayout">
+            {messages.length === 0 ? (
+              <motion.div
+                key="empty-state"
+                initial={{ opacity: 0, scale: 0.8 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.8 }}
+                transition={{ duration: 0.3 }}
+                className="text-center py-12"
+              >
+                <Shield className="w-12 h-12 text-slate-600 mx-auto mb-4" />
+                <p className="text-slate-400">
+                  Соединение установлено! Начните общение.
+                </p>
+                <p className="text-slate-500 text-sm mt-2">
+                  Все сообщения зашифрованы end-to-end
+                </p>
+              </motion.div>
+            ) : (
+              messages.map((m, index) => (
+                <MessageBubble 
+                  key={m.id} 
+                  msg={m} 
+                  index={index}
+                />
+              ))
+            )}
+          </AnimatePresence>
           <div ref={messagesEndRef} />
         </div>
       </main>
