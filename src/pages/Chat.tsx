@@ -166,7 +166,11 @@ export default function Chat({onBack}: ChatProps) {
   }, []);
 
   /* scroll down on new messages */
-  useEffect(scrollToBottom, [messages]);
+  useEffect(() => {
+    // Небольшая задержка для завершения анимации появления сообщения
+    const timer = setTimeout(scrollToBottom, 100);
+    return () => clearTimeout(timer);
+  }, [messages]);
 
   /* sync finalDisconnect state with ref */
   useEffect(() => {
@@ -245,9 +249,9 @@ export default function Chat({onBack}: ChatProps) {
 
 
   return (
-    <div className="min-h-screen flex flex-col bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
-      {/* Header */}
-      <header className="bg-slate-800/50 border-b border-slate-700 p-3">
+    <div className="h-screen flex flex-col bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 overflow-hidden">
+      {/* Header - фиксированная шапка */}
+      <header className="flex-shrink-0 bg-slate-800/50 border-b border-slate-700 p-3">
         <div className="flex items-center justify-between max-w-4xl mx-auto">
           <div className="flex items-center space-x-3">
             <Button variant="ghost" size="icon" onClick={handleBack}>
@@ -280,10 +284,10 @@ export default function Chat({onBack}: ChatProps) {
         </div>
       </header>
 
-      {/* Status banners */}
+      {/* Status banners - фиксированные баннеры */}
       {['problem', 'recovering', 'disconnected'].includes(status) && (
         <div
-          className={`${statusColor} text-white text-center py-2 font-semibold`}
+          className={`flex-shrink-0 ${statusColor} text-white text-center py-2 font-semibold`}
         >
           {status === 'problem'
             ? 'Проблемы с подключением'
@@ -293,8 +297,8 @@ export default function Chat({onBack}: ChatProps) {
         </div>
       )}
 
-      {/* Messages */}
-      <main className="flex-1 overflow-y-auto p-4">
+      {/* Messages - скроллируемая область */}
+      <main className="flex-1 overflow-y-auto p-4 min-h-0">
         <div className="max-w-4xl mx-auto space-y-4">
           <AnimatePresence mode="popLayout">
             {messages.length === 0 ? (
@@ -328,10 +332,10 @@ export default function Chat({onBack}: ChatProps) {
         </div>
       </main>
 
-      {/* Input */}
+      {/* Input - фиксированное поле ввода */}
       <form
         onSubmit={handleSend}
-        className="bg-slate-800/50 border-t border-slate-700 p-3"
+        className="flex-shrink-0 bg-slate-800/50 border-t border-slate-700 p-3"
       >
         <div className="flex max-w-4xl mx-auto space-x-2">
           <Input
