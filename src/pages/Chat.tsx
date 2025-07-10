@@ -33,6 +33,7 @@ export default function Chat({onBack}: ChatProps) {
     messagesEndRef.current?.scrollIntoView({behavior: 'smooth'});
 
   const clearHistory = () => {
+    console.log('Очистка истории сообщений');
     setMessages([]);
     if (clearHistoryTimeoutRef.current) clearTimeout(clearHistoryTimeoutRef.current);
   };
@@ -64,59 +65,95 @@ export default function Chat({onBack}: ChatProps) {
       toast.warning('Проблемы с подключением');
     });
     register('ssc-connection-recovering', () => {
+      console.log('ssc-connection-recovering: попытка восстановления');
       setStatus('recovering');
       statusRef.current = 'recovering';
       toast.info('Попытка восстановления соединения…');
-      // Не сбрасываем таймер очистки, если уже начался процесс финального отключения
-      if (clearHistoryTimeoutRef.current && !finalDisconnectRef.current) {
-        clearTimeout(clearHistoryTimeoutRef.current);
-        clearHistoryTimeoutRef.current = null;
-      }
+      // НЕ сбрасываем таймер очистки при попытках восстановления
+      // Таймер должен работать до финального отключения
     });    
     register('ssc-connection-recovered', () => {
+      console.log('ssc-connection-recovered: соединение восстановлено');
       setStatus('connected');
       statusRef.current = 'connected';
       setFinalDisconnect(false); // Сбрасываем флаг финального отключения
       finalDisconnectRef.current = false;
+      
+      // Отменяем таймер очистки при успешном восстановлении
+      if (clearHistoryTimeoutRef.current) {
+        console.log('ssc-connection-recovered: отмена таймера очистки');
+        clearTimeout(clearHistoryTimeoutRef.current);
+        clearHistoryTimeoutRef.current = null;
+      }
+      
       toast.success('Соединение восстановлено');
     });
     
     // Обработчик для финального отключения после неудачных попыток восстановления
     register('ssc-connection-failed', () => {
+      console.log('ssc-connection-failed: восстановление не удалось');
       setStatus('disconnected');
       statusRef.current = 'disconnected';
       toast.error('Восстановление соединения не удалось');
       
       // Если таймер очистки еще не запущен, запускаем его
+      // Если уже запущен - оставляем как есть, он продолжит работать
       if (!clearHistoryTimeoutRef.current) {
+        console.log('ssc-connection-failed: запуск нового таймера очистки');
         clearHistoryTimeoutRef.current = setTimeout(() => {
-          if (statusRef.current === 'disconnected' && !finalDisconnectRef.current) {
+          console.log('ssc-connection-failed: таймер сработал, проверяем условия очистки');
+          if (statusRef.current !== 'connected' && !finalDisconnectRef.current) {
             clearHistory();
             toast.info('История сообщений очищена');
             setFinalDisconnect(true);
             finalDisconnectRef.current = true;
+          } else {
+            console.log('ssc-connection-failed: условия очистки не выполнены', {
+              status: statusRef.current,
+              finalDisconnect: finalDisconnectRef.current
+            });
           }
-        }, 5000);
+        }, 5000); // 5 секунд после финального отключения
+      } else {
+        console.log('ssc-connection-failed: таймер уже запущен, оставляем как есть', {
+          currentStatus: statusRef.current,
+          finalDisconnect: finalDisconnectRef.current
+        });
       }
     });
     register('ssc-disconnected', () => {
+      console.log('ssc-disconnected: запуск таймера очистки', {
+        currentStatus: statusRef.current,
+        finalDisconnect: finalDisconnectRef.current,
+        hasTimer: !!clearHistoryTimeoutRef.current
+      });
       setStatus('disconnected');
       statusRef.current = 'disconnected';
       toast.error('Собеседник отключился');
       setFinalDisconnect(false);
       finalDisconnectRef.current = false;
     
-      if (clearHistoryTimeoutRef.current) clearTimeout(clearHistoryTimeoutRef.current);
+      if (clearHistoryTimeoutRef.current) {
+        console.log('ssc-disconnected: отмена предыдущего таймера');
+        clearTimeout(clearHistoryTimeoutRef.current);
+      }
     
       clearHistoryTimeoutRef.current = setTimeout(() => {
-        // Проверяем актуальный статус через ref перед очисткой!
-        if (statusRef.current === 'disconnected' && !finalDisconnectRef.current) {
+        console.log('ssc-disconnected: таймер сработал, проверяем условия очистки');
+        // Проверяем, что мы не подключены и еще не очистили историю
+        if (statusRef.current !== 'connected' && !finalDisconnectRef.current) {
           clearHistory();
           toast.info('История сообщений очищена');
           setFinalDisconnect(true);
           finalDisconnectRef.current = true;
+        } else {
+          console.log('ssc-disconnected: условия очистки не выполнены', {
+            status: statusRef.current,
+            finalDisconnect: finalDisconnectRef.current,
+            statusType: typeof statusRef.current
+          });
         }
-      }, 5000);
+      }, 15000); // 15 секунд = grace period (10с) + дополнительное время (5с)
     });    
 
     return () => {
