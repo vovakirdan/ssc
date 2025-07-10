@@ -26,6 +26,16 @@ const Chat = ({ onBack }: ChatProps) => {
   // Состояние для отслеживания отключения собеседника
   const [disconnected, setDisconnected] = useState(false);
 
+  // Обработчик выхода из чата с отключением
+  const handleBack = async () => {
+    try {
+      await invoke('disconnect');
+    } catch (error) {
+      console.error('Ошибка при отключении:', error);
+    }
+    onBack();
+  };
+
   // Слушаем события получения сообщений от Rust ядра
   useEffect(() => {
     const unMsg = listen("ssc-message", (event: any) => {
@@ -105,7 +115,7 @@ const Chat = ({ onBack }: ChatProps) => {
         <div className="bg-slate-800/50 border-b border-slate-700 p-4">
         <div className="flex items-center justify-between max-w-4xl mx-auto">
           <div className="flex items-center space-x-4">
-            <Button variant="ghost" size="icon" onClick={onBack} className="text-slate-400 hover:text-white">
+            <Button variant="ghost" size="icon" onClick={handleBack} className="text-slate-400 hover:text-white">
               <ArrowLeft className="w-5 h-5" />
             </Button>
             <div className="flex items-center space-x-2">
