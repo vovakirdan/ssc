@@ -89,8 +89,19 @@ impl Drop for CryptoCtx {
 /// ========== HELPERS ==========
 
 fn log(msg: &str) {
-    let now = chrono::Local::now();
-    println!("RUST: [{}] {}", now.format("%Y-%m-%d %H:%M:%S%.3f"), msg);
+    // Проверяем конфигурацию логирования
+    if crate::config::LOGGING_ENABLED {
+        #[cfg(debug_assertions)]
+        {
+            // В режиме разработки дополнительно проверяем dev::ENABLE_LOGGING
+            if !crate::config::dev::ENABLE_LOGGING {
+                return;
+            }
+        }
+        
+        let now = chrono::Local::now();
+        println!("RUST: [{}] {}", now.format("%Y-%m-%d %H:%M:%S%.3f"), msg);
+    }
 }
 
 fn rtc_config() -> RTCConfiguration {

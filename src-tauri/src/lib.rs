@@ -1,5 +1,6 @@
 mod signaling;
 mod webrtc_peer;
+mod config;
 
 #[tauri::command]
 fn greet(name: &str) -> String {
