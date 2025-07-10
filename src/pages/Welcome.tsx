@@ -2,6 +2,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Shield, MessageCircle, Users, ArrowRight } from 'lucide-react';
 import DecryptedText from '@/components/text/DecryptedText';
+import TrueFocus from '@/components/text/TrueFocus';
 import { useEffect, useState } from 'react';
 
 interface WelcomeProps {
@@ -16,7 +17,7 @@ const Welcome = ({ onStart }: WelcomeProps) => {
   useEffect(() => {
     const interval = setInterval(() => {
       setAnimationKey(prev => prev + 1);
-    }, 3000);
+    }, 5000);
 
     return () => clearInterval(interval);
   }, []);
@@ -28,7 +29,17 @@ const Welcome = ({ onStart }: WelcomeProps) => {
           <div className="mx-auto w-20 h-20 bg-gradient-to-r from-emerald-500 to-cyan-500 rounded-full flex items-center justify-center">
             <Shield className="w-10 h-10 text-white" />
           </div>
-          <h1 className="text-3xl font-bold text-white">SecureChat</h1>
+          <h1 className="text-3xl font-bold text-white">
+            <TrueFocus
+              sentence="Secure Chat"
+              manualMode={false}
+              blurAmount={5}
+              borderColor="green"
+              glowColor="rgba(0, 255, 0, 0.6)"
+              animationDuration={0.8}
+              pauseBetweenAnimations={2}
+            />
+          </h1>
           <p className="text-slate-300 text-lg">
             Супер секретный чат с end-to-end шифрованием
           </p>
