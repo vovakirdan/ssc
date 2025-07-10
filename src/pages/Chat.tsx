@@ -17,6 +17,9 @@ interface ChatProps {
 }
 
 export default function Chat({onBack}: ChatProps) {
+  /* ---------- constants ---------- */
+  const MAX_MESSAGE_LENGTH = 1000; // Максимальная длина одного сообщения
+
   /* ---------- state ---------- */
   const [messages, setMessages]               = useState<Message[]>([]);
   const [newMessage, setNewMessage]           = useState<string>('');
@@ -41,6 +44,42 @@ export default function Chat({onBack}: ChatProps) {
     if (clearHistoryTimeoutRef.current) clearTimeout(clearHistoryTimeoutRef.current);
   };
 
+  // Функция для разделения длинного текста на части
+  const splitMessageIntoParts = (text: string): string[] => {
+    if (text.length <= MAX_MESSAGE_LENGTH) {
+      return [text];
+    }
+
+    const parts: string[] = [];
+    let currentPart = '';
+    
+    // Разбиваем по словам, чтобы не разрывать слова
+    const words = text.split(' ');
+    
+    for (const word of words) {
+      // Если добавление слова превысит лимит, начинаем новую часть
+      if (currentPart.length + word.length + 1 > MAX_MESSAGE_LENGTH) {
+        if (currentPart) {
+          parts.push(currentPart.trim());
+          currentPart = word;
+        } else {
+          // Если слово само по себе длиннее лимита, разбиваем его
+          parts.push(word.substring(0, MAX_MESSAGE_LENGTH));
+          currentPart = word.substring(MAX_MESSAGE_LENGTH);
+        }
+      } else {
+        currentPart += (currentPart ? ' ' : '') + word;
+      }
+    }
+    
+    // Добавляем последнюю часть
+    if (currentPart.trim()) {
+      parts.push(currentPart.trim());
+    }
+    
+    return parts;
+  };
+
   const statusRef = useRef<ConnectionStatus>('connected');
 
   /* ---------- lifecycle ---------- */
@@ -52,10 +91,35 @@ export default function Chat({onBack}: ChatProps) {
 
     register('ssc-message', (e) => {
       const txt = (e.payload as any).text ?? e.payload;
-      setMessages((prev) => [
-        ...prev,
-        {id: Date.now().toString(), text: txt, timestamp: new Date(), isOwn: false},
-      ]);
+      
+      // Проверяем, является ли это частью длинного сообщения
+      // Для простоты считаем, что если сообщение короткое, то это отдельное сообщение
+      // Если длинное - то это часть, которую нужно разбить
+      const messageParts = splitMessageIntoParts(txt);
+      
+      if (messageParts.length === 1) {
+        // Обычное сообщение
+        setMessages((prev) => [
+          ...prev,
+          {id: Date.now().toString(), text: txt, timestamp: new Date(), isOwn: false},
+        ]);
+      } else {
+        // Длинное сообщение, разбитое на части
+        const groupId = Date.now().toString();
+        const totalParts = messageParts.length;
+        
+        const incomingMessages: Message[] = messageParts.map((part, index) => ({
+          id: `${groupId}-${index}`,
+          text: part,
+          timestamp: new Date(),
+          isOwn: false,
+          groupId: groupId,
+          partIndex: index,
+          totalParts: totalParts,
+        }));
+        
+        setMessages((prev) => [...prev, ...incomingMessages]);
+      }
     });
 
     register('ssc-connected', () => {
@@ -199,20 +263,40 @@ export default function Chat({onBack}: ChatProps) {
     setNewMessage('');
     setSending(true);
 
-    const local: Message = {
-      id: Date.now().toString(),
-      text: txt,
+    // Разбиваем сообщение на части
+    const messageParts = splitMessageIntoParts(txt);
+    const groupId = Date.now().toString(); // Уникальный ID для группы сообщений
+    const totalParts = messageParts.length;
+
+    // Создаем локальные сообщения для каждой части
+    const localMessages: Message[] = messageParts.map((part, index) => ({
+      id: `${groupId}-${index}`,
+      text: part,
       timestamp: new Date(),
       isOwn: true,
-    };
-    setMessages((p) => [...p, local]);
+      groupId: totalParts > 1 ? groupId : undefined,
+      partIndex: totalParts > 1 ? index : undefined,
+      totalParts: totalParts > 1 ? totalParts : undefined,
+    }));
+
+    // Добавляем все части в чат
+    setMessages((p) => [...p, ...localMessages]);
 
     try {
-      const ok = await invoke<boolean>('send_text', {msg: txt});
-      if (!ok) throw new Error('send_text returned false');
+      // Отправляем каждую часть отдельно
+      for (let i = 0; i < messageParts.length; i++) {
+        const ok = await invoke<boolean>('send_text', {msg: messageParts[i]});
+        if (!ok) throw new Error(`send_text returned false for part ${i}`);
+        
+        // Небольшая задержка между отправками частей
+        if (i < messageParts.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+      }
     } catch (err) {
       toast.error('Не удалось отправить сообщение');
-      setMessages((p) => p.filter((m) => m.id !== local.id));
+      // Удаляем все части сообщения при ошибке
+      setMessages((p) => p.filter((m) => !localMessages.some(lm => lm.id === m.id)));
     } finally {
       setSending(false);
     }
@@ -221,6 +305,10 @@ export default function Chat({onBack}: ChatProps) {
   /* ---------- UI ---------- */
   const {width} = useWindowSize(); // simple mobile check
   const isMobile = width < 640;
+
+  // Определяем, будет ли сообщение разбито на части
+  const messageParts = splitMessageIntoParts(newMessage);
+  const willBeSplit = messageParts.length > 1;
 
   const statusColor =
     status === 'connected'
@@ -338,21 +426,29 @@ export default function Chat({onBack}: ChatProps) {
         className="flex-shrink-0 bg-slate-800/50 border-t border-slate-700 p-3"
       >
         <div className="flex max-w-4xl mx-auto space-x-2">
-          <Input
-            value={newMessage}
-            onChange={(e) => setNewMessage(e.target.value)}
-            placeholder={
-              status === 'connected'
-                ? 'Введите сообщение…'
-                : status === 'problem'
-                ? 'Проблемы с подключением'
-                : status === 'recovering'
-                ? 'Восстановление соединения…'
-                : 'Соединение разорвано'
-            }
-            disabled={sending || status !== 'connected'}
-            className="flex-1 bg-slate-700 border-slate-600 text-white placeholder-slate-400 focus:border-emerald-500"
-          />
+          <div className="flex-1 relative">
+            <Input
+              value={newMessage}
+              onChange={(e) => setNewMessage(e.target.value)}
+              placeholder={
+                status === 'connected'
+                  ? 'Введите сообщение…'
+                  : status === 'problem'
+                  ? 'Проблемы с подключением'
+                  : status === 'recovering'
+                  ? 'Восстановление соединения…'
+                  : 'Соединение разорвано'
+              }
+              disabled={sending || status !== 'connected'}
+              className="flex-1 bg-slate-700 border-slate-600 text-white placeholder-slate-400 focus:border-emerald-500"
+            />
+            {/* Индикатор разбиения сообщения */}
+            {willBeSplit && newMessage.trim() && (
+              <div className="absolute -top-6 left-0 text-xs text-slate-400">
+                Сообщение будет отправлено в {messageParts.length} частях
+              </div>
+            )}
+          </div>
           <Button
             type="submit"
             disabled={sending || !newMessage.trim() || status !== 'connected'}
