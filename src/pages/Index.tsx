@@ -4,6 +4,7 @@ import GenerateQR from './GenerateQR';
 import ScanQR from './ScanQR';
 import Chat from './Chat';
 import VerifyFingerprint from './VerifyFingerprint';
+import GradientText from '@/components/text/GradientText';
 
 type AppMode = 'welcome' | 'generate' | 'scan' | 'verify' | 'chat';
 
@@ -51,7 +52,14 @@ const Index = () => {
       <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex items-center justify-center p-4">
         <div className="max-w-md w-full space-y-6">
           <div className="text-center">
-            <h2 className="text-2xl font-bold text-white mb-4">Выберите действие</h2>
+            <h2 className="text-3xl font-bold text-white mb-4">
+              <GradientText
+                colors={['#40ffaa', '#4079ff', '#40ffaa', '#4079ff', '#40ffaa']}
+                animationSpeed={5}
+              >
+                Выберите действие
+              </GradientText>
+            </h2>
             <p className="text-slate-300">Создайте новое подключение или присоединитесь к существующему</p>
           </div>
 
