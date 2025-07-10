@@ -265,6 +265,21 @@ fn emit_message(msg: &str) {
     }
 }
 
+fn emit_connection_problem() {
+    log("emit_connection_problem called - connection issues detected");
+    emit_state("ssc-connection-problem");
+}
+
+fn emit_connection_recovering() {
+    log("emit_connection_recovering called - connection is recovering");
+    emit_state("ssc-connection-recovering");
+}
+
+fn emit_connection_recovered() {
+    log("emit_connection_recovered called - connection recovered");
+    emit_state("ssc-connection-recovered");
+}
+
 async fn wait_ice(pc: &RTCPeerConnection) {
     let mut done = pc.gathering_complete_promise().await;
     done.recv().await;
@@ -294,6 +309,7 @@ async fn new_peer(initiator: bool) -> Arc<RTCPeerConnection> {
                 let crypto_exists = CRYPTO.lock().unwrap().is_some();
                 if crypto_exists {
                     log("Crypto context exists - re-emitting connected event");
+                    emit_connection_recovered();
                     emit_connected();
                 } else {
                     log("Peer connection connected - waiting for crypto context");
@@ -309,6 +325,9 @@ async fn new_peer(initiator: bool) -> Arc<RTCPeerConnection> {
                     return Box::pin(async {});
                 }
 
+                // Уведомляем о проблемах с подключением
+                emit_connection_problem();
+
                 // ставим отложенную проверку
                 let handle = tauri::async_runtime::spawn({
                     let pc = pc_state.clone(); // используем копию, а не исходный pc
@@ -317,6 +336,7 @@ async fn new_peer(initiator: bool) -> Arc<RTCPeerConnection> {
                             "Grace period started, waiting {} s",
                             GRACE_PERIOD.as_secs()
                         ));
+                        emit_connection_recovering();
                         sleep(GRACE_PERIOD).await;
 
                         let state_now = pc.connection_state();
