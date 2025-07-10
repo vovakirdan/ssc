@@ -3,6 +3,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Shield, ArrowLeft, Loader2 } from 'lucide-react';
 import { invoke } from "@tauri-apps/api/core";
+import DecryptedText from "@/components/text/DecryptedText";
 
 interface VerifyFingerprintProps {
   onConfirm: () => void;
@@ -98,7 +99,13 @@ const VerifyFingerprint = ({ onConfirm, onCancel }: VerifyFingerprintProps) => {
               <div className="text-center">
                 <div className="bg-slate-700/50 rounded-lg p-4 mb-4">
                   <p className="text-white font-mono text-lg font-bold tracking-wider">
-                    {fingerprint}
+                    <DecryptedText
+                      text={fingerprint}
+                      animateOn="view"
+                      speed={100}
+                      maxIterations={10}
+                      sequential={true}
+                    />
                   </p>
                 </div>
                 <p className="text-slate-300 text-sm">
