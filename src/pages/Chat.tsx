@@ -10,6 +10,7 @@ import {useWindowSize} from 'react-use';
 import {Message, ConnectionStatus} from '@/components/chat/types';
 import {MessageBubble} from '@/components/chat/MessageBubble';
 import ShinyText from '@/components/text/ShinyText';
+import { AnimatePresence } from 'framer-motion';
 
 interface ChatProps {
   onBack: () => void;
@@ -214,7 +215,9 @@ export default function Chat({onBack}: ChatProps) {
               </p>
             </div>
           ) : (
-            messages.map((m) => <MessageBubble key={m.id} msg={m} />)
+            <AnimatePresence>
+              {messages.map((m) => <MessageBubble key={m.id} msg={m} />)}
+            </AnimatePresence>
           )}
           <div ref={messagesEndRef} />
         </div>

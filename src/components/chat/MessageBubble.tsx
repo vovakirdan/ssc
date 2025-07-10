@@ -13,10 +13,15 @@ interface Props {
  */
 export const MessageBubble: FC<Props> = ({msg}) => (
   <motion.div
-    initial={{opacity: 0, y: 10}}
-    animate={{opacity: 1, y: 0}}
-    exit={{opacity: 0, y: 10}}
-    className={`flex ${msg.isOwn ? 'justify-end' : 'justify-start'}`}
+    initial={{ opacity: 1, scale: 1, filter: 'blur(0px)' }}
+    exit={{
+      opacity: 0,
+      scale: 0.3,
+      filter: 'blur(8px)',
+      y: -20,
+      x: (Math.random() - 0.5) * 100
+    }}
+    transition={{ duration: 0.6 }}
   >
     <Card
       className={`max-w-[70%] p-3 ${
