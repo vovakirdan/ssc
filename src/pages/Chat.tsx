@@ -440,6 +440,9 @@ export default function Chat({onBack}: ChatProps) {
                   : 'Соединение разорвано'
               }
               disabled={sending || status !== 'connected'}
+              autoFocus={true}
+              autoResize={true}
+              maxRows={3}
               className="flex-1 bg-slate-700 border-slate-600 text-white placeholder-slate-400 focus:border-emerald-500"
             />
             {/* Индикатор разбиения сообщения */}
