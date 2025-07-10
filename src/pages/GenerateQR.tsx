@@ -22,7 +22,7 @@ const GenerateQR = ({ onBack, onConnected, autoGenerate }: GenerateQRProps) => {
   const [answer, setAnswer] = useState('');
   const [awaitingAnswer, setAwaitingAnswer] = useState(false);
   // TTL для QR-кода (секунды)
-  const TTL = 60;
+  const TTL = 300;
   const [ttl, setTtl] = useState(TTL);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
 

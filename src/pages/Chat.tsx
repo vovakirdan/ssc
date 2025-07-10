@@ -6,7 +6,6 @@ import { Send, Shield, ArrowLeft } from 'lucide-react';
 import { toast } from 'sonner';
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import FingerprintModal from '@/components/FingerprintModal';
 
 interface ChatProps {
   onBack: () => void;
@@ -19,25 +18,46 @@ interface Message {
   isOwn: boolean;
 }
 
+// Состояния подключения
+type ConnectionStatus = 'connected' | 'problem' | 'recovering' | 'disconnected';
+
 const Chat = ({ onBack }: ChatProps) => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [newMessage, setNewMessage] = useState('');
   const [sending, setSending] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  // Состояние для отслеживания отключения собеседника
-  const [disconnected, setDisconnected] = useState(false);
-  // Состояние для подтверждения fingerprint'а
-  const [verified, setVerified] = useState(false);
+  // Состояние подключения
+  const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('connected');
+  // Таймер для очистки истории после отключения
+  const clearHistoryTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Функция для обработки отмены fingerprint'а
-  const handleFingerprintCancel = async () => {
+  // Обработчик выхода из чата с отключением
+  const handleBack = async () => {
     try {
       await invoke('disconnect');
     } catch (error) {
-      console.error('Error disconnecting:', error);
+      console.error('Ошибка при отключении:', error);
     }
     onBack();
   };
+
+  // Функция для очистки истории сообщений
+  const clearMessagesHistory = () => {
+    setMessages([]);
+    if (clearHistoryTimeoutRef.current) {
+      clearTimeout(clearHistoryTimeoutRef.current);
+      clearHistoryTimeoutRef.current = null;
+    }
+  };
+
+  // Очистка таймера при размонтировании компонента
+  useEffect(() => {
+    return () => {
+      if (clearHistoryTimeoutRef.current) {
+        clearTimeout(clearHistoryTimeoutRef.current);
+      }
+    };
+  }, []);
 
   // Слушаем события получения сообщений от Rust ядра
   useEffect(() => {
@@ -51,15 +71,52 @@ const Chat = ({ onBack }: ChatProps) => {
       }]);
     });
     
+    // Слушаем события состояния подключения
+    const unConnected = listen("ssc-connected", () => {
+      setConnectionStatus('connected');
+    });
+
+    const unProblem = listen("ssc-connection-problem", () => {
+      setConnectionStatus('problem');
+      toast.warning('Проблемы с подключением');
+    });
+
+    const unRecovering = listen("ssc-connection-recovering", () => {
+      setConnectionStatus('recovering');
+      toast.info('Попытка восстановления соединения...');
+    });
+
+    const unRecovered = listen("ssc-connection-recovered", () => {
+      setConnectionStatus('connected');
+      toast.success('Соединение восстановлено');
+    });
+    
     // Слушаем событие отключения собеседника
     const unDisc = listen("ssc-disconnected", () => {
-      setDisconnected(true);
-      // Показываем уведомление
+      setConnectionStatus('disconnected');
       toast.error('Собеседник отключился');
+      
+      // Устанавливаем таймер для очистки истории через 5 секунд
+      clearHistoryTimeoutRef.current = setTimeout(() => {
+        clearMessagesHistory();
+        toast.info('История сообщений очищена');
+      }, 5000);
     });
     
     return () => {
       unMsg.then(f => {
+        if (typeof f === 'function') f();
+      });
+      unConnected.then(f => {
+        if (typeof f === 'function') f();
+      });
+      unProblem.then(f => {
+        if (typeof f === 'function') f();
+      });
+      unRecovering.then(f => {
+        if (typeof f === 'function') f();
+      });
+      unRecovered.then(f => {
         if (typeof f === 'function') f();
       });
       unDisc.then(f => {
@@ -79,8 +136,13 @@ const Chat = ({ onBack }: ChatProps) => {
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
     
-    if (!verified) return; // блок до проверки fingerprint'а
     if (!newMessage.trim()) return;
+
+    // Блокируем отправку при проблемах с подключением
+    if (connectionStatus !== 'connected') {
+      toast.error('Нет подключения. Сообщение не отправлено.');
+      return;
+    }
 
     const messageText = newMessage.trim();
     setNewMessage('');
@@ -114,19 +176,12 @@ const Chat = ({ onBack }: ChatProps) => {
   };
 
   return (
-    <>
-      {!verified && <FingerprintModal 
-        onConfirm={() => setVerified(true)} 
-        onCancel={handleFingerprintCancel}
-      />}
-      
-      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex flex-col" 
-           style={{opacity: verified ? 1 : 0.3, pointerEvents: verified ? "auto" : "none"}}>
+    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex flex-col">
         {/* Header */}
         <div className="bg-slate-800/50 border-b border-slate-700 p-4">
         <div className="flex items-center justify-between max-w-4xl mx-auto">
           <div className="flex items-center space-x-4">
-            <Button variant="ghost" size="icon" onClick={onBack} className="text-slate-400 hover:text-white">
+            <Button variant="ghost" size="icon" onClick={handleBack} className="text-slate-400 hover:text-white">
               <ArrowLeft className="w-5 h-5" />
             </Button>
             <div className="flex items-center space-x-2">
@@ -138,12 +193,42 @@ const Chat = ({ onBack }: ChatProps) => {
             </div>
           </div>
           {/* Индикатор статуса подключения */}
-          <div className={`w-3 h-3 rounded-full ${disconnected ? 'bg-red-500' : 'bg-emerald-500 animate-pulse'}`}></div>
+          <div className="flex items-center space-x-2">
+            <div className={`w-3 h-3 rounded-full ${
+              connectionStatus === 'connected' ? 'bg-emerald-500 animate-pulse' :
+              connectionStatus === 'problem' ? 'bg-yellow-500 animate-pulse' :
+              connectionStatus === 'recovering' ? 'bg-blue-500 animate-pulse' :
+              'bg-red-500'
+            }`}></div>
+            <span className={`text-sm ${
+              connectionStatus === 'connected' ? 'text-emerald-400' :
+              connectionStatus === 'problem' ? 'text-yellow-400' :
+              connectionStatus === 'recovering' ? 'text-blue-400' :
+              'text-red-400'
+            }`}>
+              {connectionStatus === 'connected' ? 'Подключено' :
+               connectionStatus === 'problem' ? 'Проблемы' :
+               connectionStatus === 'recovering' ? 'Восстановление' :
+               'Отключено'}
+            </span>
+          </div>
         </div>
       </div>
 
-      {/* Баннер об отключении собеседника */}
-      {disconnected && (
+      {/* Баннеры состояния подключения */}
+      {connectionStatus === 'problem' && (
+        <div className="bg-yellow-500/80 text-white text-center py-2 font-semibold">
+          Проблемы с подключением
+        </div>
+      )}
+      
+      {connectionStatus === 'recovering' && (
+        <div className="bg-blue-500/80 text-white text-center py-2 font-semibold">
+          Попытка восстановления соединения...
+        </div>
+      )}
+      
+      {connectionStatus === 'disconnected' && (
         <div className="bg-red-500/80 text-white text-center py-2 font-semibold">
           Собеседник отключился
         </div>
@@ -193,13 +278,18 @@ const Chat = ({ onBack }: ChatProps) => {
             <Input
               value={newMessage}
               onChange={(e) => setNewMessage(e.target.value)}
-              placeholder="Введите сообщение..."
-              disabled={sending}
+              placeholder={
+                connectionStatus === 'connected' ? "Введите сообщение..." :
+                connectionStatus === 'problem' ? "Проблемы с подключением" :
+                connectionStatus === 'recovering' ? "Восстановление соединения..." :
+                "Соединение разорвано"
+              }
+              disabled={sending || connectionStatus !== 'connected'}
               className="flex-1 bg-slate-700 border-slate-600 text-white placeholder-slate-400 focus:border-emerald-500"
             />
             <Button 
               type="submit" 
-              disabled={sending || !newMessage.trim()}
+              disabled={sending || !newMessage.trim() || connectionStatus !== 'connected'}
               className="bg-emerald-600 hover:bg-emerald-700"
             >
               <Send className="w-4 h-4" />
@@ -208,7 +298,6 @@ const Chat = ({ onBack }: ChatProps) => {
         </form>
       </div>
     </div>
-    </>
   );
 };
 
