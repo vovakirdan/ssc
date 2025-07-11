@@ -26,6 +26,7 @@ use webrtc::{
     },
 };
 use zeroize::{Zeroize, ZeroizeOnDrop};
+use webrtc::ice_transport::ice_candidate::RTCIceCandidate;
 
 /// ========== GLOBALS ==========
 static PEER: Lazy<Mutex<Option<Arc<RTCPeerConnection>>>> = Lazy::new(|| Mutex::new(None));
@@ -101,6 +102,48 @@ fn log(msg: &str) {
         
         let now = chrono::Local::now();
         println!("RUST: [{}] {}", now.format("%Y-%m-%d %H:%M:%S%.3f"), msg);
+    }
+}
+
+/// Печать SDP: только строки с кандидатами, чтобы не «светить» всё Sdp
+fn dump_sdp(label: &str, sdp: &RTCSessionDescription) {
+    let s = sdp.sdp.as_str();
+    log(&format!("===== SDP {label} ====="));
+    for line in s.lines() {
+        if line.starts_with("a=candidate:") || line.starts_with("a=end-of-candidates") {
+            log(line);
+        }
+    }
+    log("===== /SDP =====");
+}
+
+/// Печать ICE-candidate при появлении (Trickle-ICE)
+async fn dump_candidate(label: &str, cand: &RTCIceCandidate) {
+    if let Ok(init) = cand.to_json() {
+        log(&format!(
+            "Trickle {label}: candidate={} sdp_mid={:?} sdp_mline_index={:?} username_fragment={:?}",
+            init.candidate, init.sdp_mid, init.sdp_mline_index, init.username_fragment
+        ));
+    }
+}
+
+/// Быстрый снимок getStats → выбранная пара
+async fn dump_selected_pair(pc: &RTCPeerConnection, moment: &str) {
+    let stats = pc.get_stats().await;
+    for (_, v) in stats.reports {
+        match v {
+            webrtc::stats::StatsReportType::CandidatePair(pair) => {
+                if pair.nominated {
+                    log(&format!(
+                        "STATS {moment}: {}:{}  type: {:?}  bytes={}/{} state={:?}",
+                        pair.local_candidate_id, pair.remote_candidate_id,
+                        pair.stats_type,
+                        pair.bytes_sent, pair.bytes_received, pair.state
+                    ));
+                }
+            }
+            _ => {}
+        }
     }
 }
 
@@ -306,6 +349,17 @@ async fn new_peer(initiator: bool) -> Arc<RTCPeerConnection> {
     let api = APIBuilder::new().build();
     let pc = Arc::new(api.new_peer_connection(rtc_config()).await.unwrap());
 
+    pc.on_ice_candidate(Box::new(move |cand: Option<RTCIceCandidate>| {
+        if let Some(c) = cand {
+            // cand == None → end-of-candidates
+            tauri::async_runtime::spawn({
+                let c = c.clone();
+                async move { dump_candidate("LOCAL", &c).await; }
+            });
+        }
+        Box::pin(async {})
+    }));
+
     // делаем копию для обработчика состояний
     let pc_state = pc.clone();
 
@@ -340,6 +394,11 @@ async fn new_peer(initiator: bool) -> Arc<RTCPeerConnection> {
                     log("Disconnect task already pending, ignoring");
                     return Box::pin(async {});
                 }
+                
+                let pc_stats = pc_state.clone();
+                tauri::async_runtime::spawn(async move {
+                    dump_selected_pair(&pc_stats, "BEFORE-FAIL").await;
+                });
 
                 // Уведомляем о проблемах с подключением
                 emit_connection_problem();
@@ -563,6 +622,7 @@ pub async fn generate_offer() -> String {
     let offer = pc.create_offer(None).await.unwrap();
     log("Setting local description (offer)...");
     pc.set_local_description(offer).await.unwrap();
+    dump_sdp("LOCAL-OFFER", pc.local_description().await.as_ref().unwrap());
     log("Waiting for ICE gathering...");
     wait_ice(&pc).await; // ← обратно вернули ICE-кандидаты
     log("ICE gathering complete, encoding offer");
@@ -585,10 +645,12 @@ pub async fn accept_offer_and_create_answer(encoded: String) -> String {
 
     log("Setting remote description (offer)...");
     pc.set_remote_description(offer.sdp).await.unwrap();
+    dump_sdp("REMOTE-OFFER", pc.remote_description().await.as_ref().unwrap());
     log("Creating answer...");
     let answer = pc.create_answer(None).await.unwrap();
     log("Setting local description (answer)...");
     pc.set_local_description(answer).await.unwrap();
+    dump_sdp("LOCAL-ANSWER", pc.local_description().await.as_ref().unwrap());
     log("Waiting for ICE gathering...");
     wait_ice(&pc).await;
     log("ICE gathering complete, encoding answer");
