@@ -28,7 +28,10 @@ const GenerateQR = ({ onBack, onConnected, autoGenerate }: GenerateQRProps) => {
 
   // Слушаем событие успешного подключения
   useEffect(() => {
-    const un = listen("ssc-connected", () => onConnected());
+    const un = listen("ssc-connected", () => {
+      console.log('GenerateQR: received ssc-connected event');
+      onConnected();
+    });
     return () => { un.then(f => f()); };
   }, [onConnected]);
 
@@ -67,7 +70,7 @@ const GenerateQR = ({ onBack, onConnected, autoGenerate }: GenerateQRProps) => {
   const generateOffer = async () => {
     setLoading(true);
     try {
-      const result = await invoke('generate_offer') as string;
+      const result = await invoke('generate_offer_with_candidates') as string;
       setOffer(result);
       setAwaitingAnswer(true);
       toast.success('QR-код сгенерирован!');
@@ -98,10 +101,10 @@ const GenerateQR = ({ onBack, onConnected, autoGenerate }: GenerateQRProps) => {
 
     setLoading(true);
     try {
-      const success = await invoke('set_answer', { encoded: answer }) as boolean;
+      const success = await invoke('set_answer_with_candidates', { encoded: answer }) as boolean;
       if (success) {
         toast.success('Соединение установлено!');
-        setTimeout(() => onConnected(), 1000);
+        // Не вызываем onConnected() здесь, событие ssc-connected сделает это автоматически
       } else {
         toast.error('Не удалось установить соединение');
       }

@@ -25,6 +25,7 @@ const Index = () => {
   };
 
   const handleConnected = () => {
+    console.log('Index: handleConnected called - switching to verify mode');
     setMode('verify');
   };
 
