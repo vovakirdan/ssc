@@ -13,9 +13,12 @@
   "app": {
     "windows": [
       {
-        "title": "ssc",
+        "title": "ZeroID",
         "width": 800,
-        "height": 600
+        "height": 600,
+        "resizable": true,
+        "minWidth": 400,
+        "minHeight": 300
       }
     ],
     "security": {
