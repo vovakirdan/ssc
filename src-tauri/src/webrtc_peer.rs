@@ -31,28 +31,54 @@ use webrtc::peer_connection::policy::bundle_policy::RTCBundlePolicy;
 use webrtc::peer_connection::policy::rtcp_mux_policy::RTCRtcpMuxPolicy;
 use webrtc::ice_transport::ice_candidate::RTCIceCandidateInit;
 
-/// ========== GLOBALS ==========
+/// ========== GLOBAL STATE ==========
+
+/// WebRTC Peer Connection
 static PEER: Lazy<Mutex<Option<Arc<RTCPeerConnection>>>> = Lazy::new(|| Mutex::new(None));
+
+/// Data Channel для обмена сообщениями
 static DATA_CH: Lazy<Mutex<Option<Arc<RTCDataChannel>>>> = Lazy::new(|| Mutex::new(None));
+
+/// Криптографический контекст для шифрования
 static CRYPTO: Lazy<Mutex<Option<CryptoCtx>>> = Lazy::new(|| Mutex::new(None));
+
+/// Приватный ключ для обмена
 static MY_PRIV: Lazy<Mutex<Option<agreement::EphemeralPrivateKey>>> =
     Lazy::new(|| Mutex::new(None));
+
+/// Публичный ключ для обмена
 static MY_PUB: Lazy<Mutex<Option<[u8; 32]>>> = Lazy::new(|| Mutex::new(None));
+
+/// Handle для отправки событий в Tauri
 pub static APP: Lazy<Mutex<Option<AppHandle>>> = Lazy::new(|| Mutex::new(None));
-// Флаг для отслеживания того, что соединение уже было установлено
+
+/// Флаг установленного соединения
 static WAS_CONNECTED: Lazy<Mutex<bool>> = Lazy::new(|| Mutex::new(false));
-// Отложенный таск для graceful disconnect
+
+/// Отложенная задача для graceful disconnect
 static DISCONNECT_TASK: Lazy<Mutex<Option<tauri::async_runtime::JoinHandle<()>>>> =
     Lazy::new(|| Mutex::new(None));
-// Хранилище для удаленных кандидатов, которые пришли до установки соединения
+
+/// Кандидаты, полученные до установки remote description
 static PENDING_REMOTE_CANDIDATES: Lazy<Mutex<Vec<IceCandidate>>> = Lazy::new(|| Mutex::new(Vec::new()));
-// Глобальное хранилище для сбора локальных кандидатов
+
+/// Локальные кандидаты для текущего соединения
 static LOCAL_CANDIDATES: Lazy<Mutex<Vec<IceCandidate>>> = Lazy::new(|| Mutex::new(Vec::new()));
+
+/// Флаг активного сбора кандидатов
 static COLLECTING_CANDIDATES: Lazy<Mutex<bool>> = Lazy::new(|| Mutex::new(false));
 
+/// ========== CONSTANTS ==========
+
+/// Длина тега аутентификации для ChaCha20-Poly1305
 const TAG_LEN: usize = 16;
+
+/// Период ожидания перед принудительным отключением
 const GRACE_PERIOD: Duration = Duration::from_secs(10);
 
+// ========== PUBLIC TYPES ==========
+
+/// Полезная нагрузка SDP с метаданными
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SdpPayload {
     pub sdp: RTCSessionDescription,
@@ -60,6 +86,7 @@ pub struct SdpPayload {
     pub ts: i64,
 }
 
+/// ICE кандидат для WebRTC соединения
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct IceCandidate {
     pub candidate: String,
@@ -68,7 +95,7 @@ pub struct IceCandidate {
     pub connection_id: String, // ID соединения для сопоставления
 }
 
-// Структура для хранения всех кандидатов соединения
+/// Полный пакет соединения с SDP и кандидатами
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ConnectionBundle {
     pub sdp_payload: SdpPayload,
@@ -110,8 +137,9 @@ impl Drop for CryptoCtx {
     }
 }
 
-/// ========== HELPERS ==========
+/// ========== UTILITY FUNCTIONS ==========
 
+/// Логирование с временными метками
 fn log(msg: &str) {
     // Проверяем конфигурацию логирования
     if crate::config::LOGGING_ENABLED {
@@ -126,18 +154,6 @@ fn log(msg: &str) {
         let now = chrono::Local::now();
         println!("RUST: [{}] {}", now.format("%Y-%m-%d %H:%M:%S%.3f"), msg);
     }
-}
-
-/// Печать SDP: только строки с кандидатами, чтобы не «светить» всё Sdp
-fn dump_sdp(label: &str, sdp: &RTCSessionDescription) {
-    let s = sdp.sdp.as_str();
-    log(&format!("===== SDP {label} ====="));
-    for line in s.lines() {
-        if line.starts_with("a=candidate:") || line.starts_with("a=end-of-candidates") {
-            log(line);
-        }
-    }
-    log("===== /SDP =====");
 }
 
 /// Печать ICE-candidate при появлении (Trickle-ICE)
@@ -207,7 +223,7 @@ fn rtc_config() -> RTCConfiguration {
         ice_candidate_pool_size: 10,
         bundle_policy: RTCBundlePolicy::MaxBundle,
         rtcp_mux_policy: RTCRtcpMuxPolicy::Require,
-        ice_transport_policy: webrtc::peer_connection::policy::ice_transport_policy::RTCIceTransportPolicy::Relay,
+        // ice_transport_policy: webrtc::peer_connection::policy::ice_transport_policy::RTCIceTransportPolicy::Relay,
         ..Default::default()
     }
 }
@@ -417,11 +433,6 @@ fn emit_connection_failed() {
     emit_state("ssc-connection-failed");
 }
 
-async fn wait_ice(pc: &RTCPeerConnection) {
-    let mut done = pc.gathering_complete_promise().await;
-    done.recv().await;
-}
-
 // Добавляем новую функцию для ожидания кандидатов с таймаутом
 async fn wait_for_candidates(timeout_secs: u64) -> Vec<IceCandidate> {
     let start = std::time::Instant::now();
@@ -483,10 +494,8 @@ fn analyze_candidates(candidates: &[IceCandidate]) {
 }
 
 /// Применяет ICE кандидат от удаленной стороны
-#[tauri::command]
-pub async fn add_ice_candidate(app: tauri::AppHandle, candidate: IceCandidate) -> bool {
+pub async fn add_ice_candidate(candidate: IceCandidate) -> bool {
     log(&format!("add_ice_candidate called: {:?}", candidate));
-    *APP.lock().unwrap() = Some(app); // сохраняем handle для событий
     
     let pc = { PEER.lock().unwrap().as_ref().cloned() };
     
@@ -847,9 +856,9 @@ fn attach_dc(dc: &Arc<RTCDataChannel>) {
     }));
 }
 
-/// ========== PUBLIC API ==========
+/// ========== LEGACY API ==========
 
-/// A-сторона: создаём OFFER → base64
+/// A-сторона: создаём OFFER → base64 (устаревший API)
 pub async fn generate_offer() -> String {
     log("generate_offer called - creating new peer connection");
     let connection_id = random_id();
@@ -1018,11 +1027,9 @@ pub async fn disconnect() {
 
 /// ========== NEW API WITH CANDIDATES ==========
 
-/// Новая функция для генерации offer с кандидатами
-#[tauri::command]
-pub async fn generate_offer_with_candidates(app: tauri::AppHandle) -> String {
+/// Генерация offer с полным набором ICE кандидатов
+pub async fn generate_offer_with_candidates() -> String {
     log("generate_offer_with_candidates called");
-    *APP.lock().unwrap() = Some(app); // сохраняем handle для событий
     
     // Очищаем старые кандидаты
     LOCAL_CANDIDATES.lock().unwrap().clear();
@@ -1062,11 +1069,9 @@ pub async fn generate_offer_with_candidates(app: tauri::AppHandle) -> String {
     general_purpose::STANDARD.encode(compressed)
 }
 
-/// Новая функция для принятия offer с кандидатами
-#[tauri::command]
-pub async fn accept_offer_with_candidates(app: tauri::AppHandle, encoded: String) -> String {
+/// Принятие offer с полным набором ICE кандидатов
+pub async fn accept_offer_with_candidates(encoded: String) -> String {
     log("accept_offer_with_candidates called");
-    *APP.lock().unwrap() = Some(app); // сохраняем handle для событий
     
     // Декодируем bundle
     let bundle = dec_bundle(&encoded);
@@ -1126,11 +1131,9 @@ pub async fn accept_offer_with_candidates(app: tauri::AppHandle, encoded: String
     general_purpose::STANDARD.encode(compressed)
 }
 
-/// Новая функция для установки answer с кандидатами
-#[tauri::command]
-pub async fn set_answer_with_candidates(app: tauri::AppHandle, encoded: String) -> bool {
+/// Установка answer с полным набором ICE кандидатов
+pub async fn set_answer_with_candidates(encoded: String) -> bool {
     log("set_answer_with_candidates called");
-    *APP.lock().unwrap() = Some(app); // сохраняем handle для событий
     
     // Декодируем bundle
     let bundle = dec_bundle(&encoded);
