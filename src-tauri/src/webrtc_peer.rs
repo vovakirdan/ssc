@@ -27,6 +27,9 @@ use webrtc::{
 };
 use zeroize::{Zeroize, ZeroizeOnDrop};
 use webrtc::ice_transport::ice_candidate::RTCIceCandidate;
+use webrtc::peer_connection::policy::bundle_policy::RTCBundlePolicy;
+use webrtc::peer_connection::policy::rtcp_mux_policy::RTCRtcpMuxPolicy;
+use webrtc::ice_transport::ice_candidate::RTCIceCandidateInit;
 
 /// ========== GLOBALS ==========
 static PEER: Lazy<Mutex<Option<Arc<RTCPeerConnection>>>> = Lazy::new(|| Mutex::new(None));
@@ -41,15 +44,35 @@ static WAS_CONNECTED: Lazy<Mutex<bool>> = Lazy::new(|| Mutex::new(false));
 // Отложенный таск для graceful disconnect
 static DISCONNECT_TASK: Lazy<Mutex<Option<tauri::async_runtime::JoinHandle<()>>>> =
     Lazy::new(|| Mutex::new(None));
+// Хранилище для удаленных кандидатов, которые пришли до установки соединения
+static PENDING_REMOTE_CANDIDATES: Lazy<Mutex<Vec<IceCandidate>>> = Lazy::new(|| Mutex::new(Vec::new()));
+// Глобальное хранилище для сбора локальных кандидатов
+static LOCAL_CANDIDATES: Lazy<Mutex<Vec<IceCandidate>>> = Lazy::new(|| Mutex::new(Vec::new()));
+static COLLECTING_CANDIDATES: Lazy<Mutex<bool>> = Lazy::new(|| Mutex::new(false));
 
 const TAG_LEN: usize = 16;
 const GRACE_PERIOD: Duration = Duration::from_secs(10);
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SdpPayload {
     pub sdp: RTCSessionDescription,
     pub id: String,
     pub ts: i64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct IceCandidate {
+    pub candidate: String,
+    pub sdp_mid: Option<String>,
+    pub sdp_mline_index: Option<u16>,
+    pub connection_id: String, // ID соединения для сопоставления
+}
+
+// Структура для хранения всех кандидатов соединения
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ConnectionBundle {
+    pub sdp_payload: SdpPayload,
+    pub ice_candidates: Vec<IceCandidate>,
 }
 
 /// Безопасная обёртка для ключа с автоматической очисткой памяти
@@ -149,13 +172,42 @@ async fn dump_selected_pair(pc: &RTCPeerConnection, moment: &str) {
 
 fn rtc_config() -> RTCConfiguration {
     RTCConfiguration {
-        ice_servers: vec![RTCIceServer {
-            urls: vec![
-                "stun:stun.l.google.com:19302".into(),
-                "stun:stun1.l.google.com:19302".into(),
-            ],
-            ..Default::default()
-        }],
+        ice_servers: vec![
+            // STUN серверы
+            RTCIceServer {
+                urls: vec![
+                    "stun:stun.l.google.com:19302".into(),
+                    "stun:stun1.l.google.com:19302".into(),
+                    "stun:stun2.l.google.com:19302".into(),
+                    "stun:stun3.l.google.com:19302".into(),
+                ],
+                ..Default::default()
+            },
+            // TURN серверы с разными портами
+            RTCIceServer {
+                urls: vec![
+                    "turn:global.relay.metered.ca:80".into(),
+                    "turn:global.relay.metered.ca:80?transport=tcp".into(),
+                ],
+                username: "780f40cf85d42703e9fd4d35".into(), // don't worry. Thats temp creds
+                credential: "BmtggDCoW5ZDaonw".into(), // don't worry. Thats temp creds
+                ..Default::default()
+            },
+            RTCIceServer {
+                urls: vec![
+                    "turn:global.relay.metered.ca:443".into(),
+                    "turn:global.relay.metered.ca:443?transport=tcp".into(),
+                ],
+                username: "780f40cf85d42703e9fd4d35".into(), // don't worry. Thats temp creds
+                credential: "BmtggDCoW5ZDaonw".into(), // don't worry. Thats temp creds
+                ..Default::default()
+            },
+        ],
+        // Добавляем более агрессивные настройки ICE
+        ice_candidate_pool_size: 10,
+        bundle_policy: RTCBundlePolicy::MaxBundle,
+        rtcp_mux_policy: RTCRtcpMuxPolicy::Require,
+        ice_transport_policy: webrtc::peer_connection::policy::ice_transport_policy::RTCIceTransportPolicy::Relay,
         ..Default::default()
     }
 }
@@ -286,12 +338,30 @@ fn dec(s: &str) -> SdpPayload {
     serde_json::from_slice(&json).unwrap()
 }
 
+fn dec_bundle(s: &str) -> ConnectionBundle {
+    // 1. base64 -> bytes
+    let compressed = general_purpose::STANDARD.decode(s).unwrap();
+
+    // 2. gunzip с ограничением размера для защиты от zip-bomb
+    let gz = GzDecoder::new(&compressed[..]);
+    let mut json = Vec::new();
+    // Ограничиваем размер распаковываемых данных до 256 KiB
+    const MAX_DECOMPRESSED_SIZE: u64 = 256 * 1024; // 256 KiB
+    let mut limited_reader = gz.take(MAX_DECOMPRESSED_SIZE);
+    limited_reader.read_to_end(&mut json).unwrap();
+
+    // 3. JSON -> struct
+    serde_json::from_slice(&json).unwrap()
+}
+
 fn emit_state(evt: &str) {
     log(&format!("emit_state called with event: {}", evt));
     if let Some(app) = APP.lock().unwrap().clone() {
         log(&format!("APP handle exists, emitting event: {}", evt));
-        let _result = app.emit(evt, ());
-        log(&format!("Emit result: {:?}", _result));
+        match app.emit(evt, ()) {
+            Ok(_) => log(&format!("Successfully emitted event: {}", evt)),
+            Err(e) => log(&format!("Failed to emit event {}: {:?}", evt, e)),
+        }
     } else {
         log(&format!("APP handle is None, cannot emit event: {}", evt));
     }
@@ -310,6 +380,14 @@ fn emit_disconnected() {
     *MY_PRIV.lock().unwrap() = None;
     *MY_PUB.lock().unwrap() = None;
     *WAS_CONNECTED.lock().unwrap() = false;
+    
+    // очищаем отложенные кандидаты
+    PENDING_REMOTE_CANDIDATES.lock().unwrap().clear();
+    
+    // очищаем локальные кандидаты
+    LOCAL_CANDIDATES.lock().unwrap().clear();
+    *COLLECTING_CANDIDATES.lock().unwrap() = false;
+    
     emit_state("ssc-disconnected");
 }
 
@@ -344,19 +422,173 @@ async fn wait_ice(pc: &RTCPeerConnection) {
     done.recv().await;
 }
 
+// Добавляем новую функцию для ожидания кандидатов с таймаутом
+async fn wait_for_candidates(timeout_secs: u64) -> Vec<IceCandidate> {
+    let start = std::time::Instant::now();
+    
+    loop {
+        // Ждем минимум 2 секунды для сбора кандидатов
+        if start.elapsed().as_secs() < 2 {
+            sleep(Duration::from_millis(100)).await;
+            continue;
+        }
+        
+        // После 2 секунд проверяем состояние
+        let collecting = *COLLECTING_CANDIDATES.lock().unwrap();
+        let candidates_count = LOCAL_CANDIDATES.lock().unwrap().len();
+        
+        log(&format!("Candidate collection status: collecting={}, count={}, elapsed={}s", 
+                    collecting, candidates_count, start.elapsed().as_secs()));
+        
+        // Если сбор закончен ИЛИ есть хотя бы relay кандидаты - возвращаем
+        if !collecting || candidates_count > 0 {
+            break;
+        }
+        
+        // Проверяем таймаут
+        if start.elapsed().as_secs() >= timeout_secs {
+            log(&format!("Candidate collection timeout after {} seconds", timeout_secs));
+            break;
+        }
+        
+        sleep(Duration::from_millis(100)).await;
+    }
+    
+    LOCAL_CANDIDATES.lock().unwrap().clone()
+}
+
+fn analyze_candidates(candidates: &[IceCandidate]) {
+    let mut host_count = 0;
+    let mut srflx_count = 0;
+    let mut relay_count = 0;
+    
+    for candidate in candidates {
+        if candidate.candidate.contains("typ host") {
+            host_count += 1;
+        } else if candidate.candidate.contains("typ srflx") {
+            srflx_count += 1;
+        } else if candidate.candidate.contains("typ relay") {
+            relay_count += 1;
+        }
+    }
+    
+    log(&format!(
+        "Candidate analysis: {} host, {} srflx, {} relay",
+        host_count, srflx_count, relay_count
+    ));
+    
+    if relay_count == 0 {
+        log("WARNING: No TURN relay candidates found! Connection through NAT may fail.");
+    }
+}
+
+/// Применяет ICE кандидат от удаленной стороны
+#[tauri::command]
+pub async fn add_ice_candidate(app: tauri::AppHandle, candidate: IceCandidate) -> bool {
+    log(&format!("add_ice_candidate called: {:?}", candidate));
+    *APP.lock().unwrap() = Some(app); // сохраняем handle для событий
+    
+    let pc = { PEER.lock().unwrap().as_ref().cloned() };
+    
+    if let Some(pc) = pc {
+        // Если remote description уже установлен, применяем кандидат сразу
+        if pc.remote_description().await.is_some() {
+            let ice_candidate = RTCIceCandidateInit {
+                candidate: candidate.candidate,
+                sdp_mid: candidate.sdp_mid,
+                sdp_mline_index: candidate.sdp_mline_index,
+                username_fragment: None,
+            };
+            
+            match pc.add_ice_candidate(ice_candidate).await {
+                Ok(_) => {
+                    log("Successfully added ICE candidate");
+                    true
+                }
+                Err(e) => {
+                    log(&format!("Failed to add ICE candidate: {:?}", e));
+                    false
+                }
+            }
+        } else {
+            // Если remote description еще не установлен, сохраняем кандидат
+            log("Remote description not set yet, queuing candidate");
+            PENDING_REMOTE_CANDIDATES.lock().unwrap().push(candidate);
+            true
+        }
+    } else {
+        log("No peer connection available, queuing candidate");
+        PENDING_REMOTE_CANDIDATES.lock().unwrap().push(candidate);
+        false
+    }
+}
+
+/// Применяет все отложенные кандидаты после установки remote description
+async fn apply_pending_candidates(pc: &RTCPeerConnection) {
+    let candidates = {
+        let mut pending = PENDING_REMOTE_CANDIDATES.lock().unwrap();
+        pending.drain(..).collect::<Vec<_>>()
+    };
+    
+    for candidate in candidates {
+        log(&format!("Applying pending candidate: {:?}", candidate));
+        let ice_candidate = RTCIceCandidateInit {
+            candidate: candidate.candidate,
+            sdp_mid: candidate.sdp_mid,
+            sdp_mline_index: candidate.sdp_mline_index,
+            username_fragment: None,
+        };
+        
+        if let Err(e) = pc.add_ice_candidate(ice_candidate).await {
+            log(&format!("Failed to apply pending candidate: {:?}", e));
+        }
+    }
+}
+
 /// создаём Peer; если `initiator`, то сами делаем data-channel
-async fn new_peer(initiator: bool) -> Arc<RTCPeerConnection> {
+async fn new_peer(initiator: bool, connection_id: String) -> Arc<RTCPeerConnection> {
     let api = APIBuilder::new().build();
     let pc = Arc::new(api.new_peer_connection(rtc_config()).await.unwrap());
 
+    // Начинаем сбор кандидатов
+    *COLLECTING_CANDIDATES.lock().unwrap() = true;
+    LOCAL_CANDIDATES.lock().unwrap().clear();
+
+    // Обработчик для сбора локальных кандидатов
     pc.on_ice_candidate(Box::new(move |cand: Option<RTCIceCandidate>| {
+        let conn_id = connection_id.clone();
         if let Some(c) = cand {
-            // cand == None → end-of-candidates
             tauri::async_runtime::spawn({
                 let c = c.clone();
-                async move { dump_candidate("LOCAL", &c).await; }
+                async move { 
+                    dump_candidate("LOCAL", &c).await;
+                    
+                    // Сохраняем кандидат локально
+                    if let Ok(init) = c.to_json() {
+                        let ice_candidate = IceCandidate {
+                            candidate: init.candidate,
+                            sdp_mid: init.sdp_mid,
+                            sdp_mline_index: init.sdp_mline_index,
+                            connection_id: conn_id,
+                        };
+                        
+                        // Всегда сохраняем кандидат, независимо от флага collecting
+                        LOCAL_CANDIDATES.lock().unwrap().push(ice_candidate);
+                        log(&format!("Added ICE candidate, total count: {}", LOCAL_CANDIDATES.lock().unwrap().len()));
+                    }
+                }
             });
+        } else {
+            // cand == None означает конец сбора
+            log("ICE candidate gathering completed (null candidate received)");
+            *COLLECTING_CANDIDATES.lock().unwrap() = false;
         }
+        Box::pin(async {})
+    }));
+
+    // Добавляем обработчик ICE gathering state для отладки
+    pc.on_ice_gathering_state_change(Box::new(move |state| {
+        log(&format!("ICE gathering state changed to: {:?}", state));
         Box::pin(async {})
     }));
 
@@ -479,6 +711,13 @@ fn attach_dc(dc: &Arc<RTCDataChannel>) {
     *MY_PRIV.lock().unwrap() = None;
     *MY_PUB.lock().unwrap() = None;
     *WAS_CONNECTED.lock().unwrap() = false;
+    
+    // очищаем отложенные кандидаты
+    PENDING_REMOTE_CANDIDATES.lock().unwrap().clear();
+    
+    // очищаем локальные кандидаты
+    LOCAL_CANDIDATES.lock().unwrap().clear();
+    *COLLECTING_CANDIDATES.lock().unwrap() = false;
 
     {
         *DATA_CH.lock().unwrap() = Some(dc.clone());
@@ -613,7 +852,8 @@ fn attach_dc(dc: &Arc<RTCDataChannel>) {
 /// A-сторона: создаём OFFER → base64
 pub async fn generate_offer() -> String {
     log("generate_offer called - creating new peer connection");
-    let pc = new_peer(true).await;
+    let connection_id = random_id();
+    let pc = new_peer(true, connection_id.clone()).await;
     {
         *PEER.lock().unwrap() = Some(pc.clone());
     }
@@ -622,14 +862,13 @@ pub async fn generate_offer() -> String {
     let offer = pc.create_offer(None).await.unwrap();
     log("Setting local description (offer)...");
     pc.set_local_description(offer).await.unwrap();
-    dump_sdp("LOCAL-OFFER", pc.local_description().await.as_ref().unwrap());
-    log("Waiting for ICE gathering...");
-    wait_ice(&pc).await; // ← обратно вернули ICE-кандидаты
-    log("ICE gathering complete, encoding offer");
-
+    
+    // НЕ ждем ICE gathering - отправляем offer сразу
+    log("Returning offer immediately (trickle ICE)");
+    
     enc(&SdpPayload {
         sdp: pc.local_description().await.unwrap(),
-        id: random_id(),
+        id: connection_id,
         ts: chrono::Utc::now().timestamp(),
     })
 }
@@ -638,22 +877,24 @@ pub async fn generate_offer() -> String {
 pub async fn accept_offer_and_create_answer(encoded: String) -> String {
     log("accept_offer_and_create_answer called - starting offer processing");
     let offer: SdpPayload = dec(&encoded);
-    let pc = new_peer(false).await;
+    let pc = new_peer(false, offer.id.clone()).await;
     {
         *PEER.lock().unwrap() = Some(pc.clone());
     }
 
     log("Setting remote description (offer)...");
     pc.set_remote_description(offer.sdp).await.unwrap();
-    dump_sdp("REMOTE-OFFER", pc.remote_description().await.as_ref().unwrap());
+    
+    // Применяем отложенные кандидаты
+    apply_pending_candidates(&pc).await;
+    
     log("Creating answer...");
     let answer = pc.create_answer(None).await.unwrap();
     log("Setting local description (answer)...");
     pc.set_local_description(answer).await.unwrap();
-    dump_sdp("LOCAL-ANSWER", pc.local_description().await.as_ref().unwrap());
-    log("Waiting for ICE gathering...");
-    wait_ice(&pc).await;
-    log("ICE gathering complete, encoding answer");
+    
+    // НЕ ждем ICE gathering
+    log("Returning answer immediately (trickle ICE)");
 
     enc(&SdpPayload {
         sdp: pc.local_description().await.unwrap(),
@@ -673,6 +914,8 @@ pub async fn set_answer(encoded: String) -> bool {
         match result {
             Ok(_) => {
                 log("Remote description set successfully");
+                // Применяем отложенные кандидаты
+                apply_pending_candidates(&pc).await;
                 true
             }
             Err(e) => {
@@ -762,6 +1005,167 @@ pub async fn disconnect() {
     *MY_PUB.lock().unwrap() = None;
     *WAS_CONNECTED.lock().unwrap() = false;
 
+    // очищаем отложенные кандидаты
+    PENDING_REMOTE_CANDIDATES.lock().unwrap().clear();
+    
+    // очищаем локальные кандидаты
+    LOCAL_CANDIDATES.lock().unwrap().clear();
+    *COLLECTING_CANDIDATES.lock().unwrap() = false;
+
     // отправляем событие отключения
     emit_disconnected();
+}
+
+/// ========== NEW API WITH CANDIDATES ==========
+
+/// Новая функция для генерации offer с кандидатами
+#[tauri::command]
+pub async fn generate_offer_with_candidates(app: tauri::AppHandle) -> String {
+    log("generate_offer_with_candidates called");
+    *APP.lock().unwrap() = Some(app); // сохраняем handle для событий
+    
+    // Очищаем старые кандидаты
+    LOCAL_CANDIDATES.lock().unwrap().clear();
+    *COLLECTING_CANDIDATES.lock().unwrap() = true;
+    
+    let connection_id = random_id();
+    let pc = new_peer(true, connection_id.clone()).await;
+    {
+        *PEER.lock().unwrap() = Some(pc.clone());
+    }
+
+    log("Creating offer...");
+    let offer = pc.create_offer(None).await.unwrap();
+    pc.set_local_description(offer).await.unwrap();
+    
+    // Ждем сбора кандидатов с таймаутом
+    log("Waiting for ICE candidates...");
+    let candidates = wait_for_candidates(10).await; // 10 секунд максимум
+    
+    log(&format!("Collected {} ICE candidates", candidates.len()));
+    analyze_candidates(&candidates);
+    
+    let bundle = ConnectionBundle {
+        sdp_payload: SdpPayload {
+            sdp: pc.local_description().await.unwrap(),
+            id: connection_id,
+            ts: chrono::Utc::now().timestamp(),
+        },
+        ice_candidates: candidates,
+    };
+    
+    // Кодируем всё вместе
+    let json = serde_json::to_vec(&bundle).unwrap();
+    let mut gz = GzEncoder::new(Vec::new(), Compression::fast());
+    gz.write_all(&json).unwrap();
+    let compressed = gz.finish().unwrap();
+    general_purpose::STANDARD.encode(compressed)
+}
+
+/// Новая функция для принятия offer с кандидатами
+#[tauri::command]
+pub async fn accept_offer_with_candidates(app: tauri::AppHandle, encoded: String) -> String {
+    log("accept_offer_with_candidates called");
+    *APP.lock().unwrap() = Some(app); // сохраняем handle для событий
+    
+    // Декодируем bundle
+    let bundle = dec_bundle(&encoded);
+    
+    // Очищаем старые кандидаты
+    LOCAL_CANDIDATES.lock().unwrap().clear();
+    *COLLECTING_CANDIDATES.lock().unwrap() = true;
+    
+    let pc = new_peer(false, bundle.sdp_payload.id.clone()).await;
+    {
+        *PEER.lock().unwrap() = Some(pc.clone());
+    }
+
+    // Устанавливаем remote description
+    pc.set_remote_description(bundle.sdp_payload.sdp).await.unwrap();
+    
+    // Применяем все кандидаты из offer
+    for candidate in bundle.ice_candidates {
+        log(&format!("Applying remote candidate: {:?}", candidate));
+        let ice_candidate = RTCIceCandidateInit {
+            candidate: candidate.candidate,
+            sdp_mid: candidate.sdp_mid,
+            sdp_mline_index: candidate.sdp_mline_index,
+            username_fragment: None,
+        };
+        
+        if let Err(e) = pc.add_ice_candidate(ice_candidate).await {
+            log(&format!("Failed to add candidate: {:?}", e));
+        }
+    }
+    
+    // Создаем answer
+    let answer = pc.create_answer(None).await.unwrap();
+    pc.set_local_description(answer).await.unwrap();
+    
+    // Ждем сбора кандидатов
+    log("Waiting for ICE candidates...");
+    let candidates = wait_for_candidates(10).await;
+    
+    log(&format!("Collected {} ICE candidates for answer", candidates.len()));
+    analyze_candidates(&candidates);
+    
+    let bundle = ConnectionBundle {
+        sdp_payload: SdpPayload {
+            sdp: pc.local_description().await.unwrap(),
+            id: bundle.sdp_payload.id,
+            ts: chrono::Utc::now().timestamp(),
+        },
+        ice_candidates: candidates,
+    };
+    
+    // Кодируем всё вместе
+    let json = serde_json::to_vec(&bundle).unwrap();
+    let mut gz = GzEncoder::new(Vec::new(), Compression::fast());
+    gz.write_all(&json).unwrap();
+    let compressed = gz.finish().unwrap();
+    general_purpose::STANDARD.encode(compressed)
+}
+
+/// Новая функция для установки answer с кандидатами
+#[tauri::command]
+pub async fn set_answer_with_candidates(app: tauri::AppHandle, encoded: String) -> bool {
+    log("set_answer_with_candidates called");
+    *APP.lock().unwrap() = Some(app); // сохраняем handle для событий
+    
+    // Декодируем bundle
+    let bundle = dec_bundle(&encoded);
+    
+    let pc = { PEER.lock().unwrap().as_ref().cloned() };
+    if let Some(pc) = pc {
+        // Устанавливаем remote description
+        match pc.set_remote_description(bundle.sdp_payload.sdp).await {
+            Ok(_) => {
+                log("Remote description set successfully");
+                
+                // Применяем все кандидаты из answer
+                for candidate in bundle.ice_candidates {
+                    log(&format!("Applying remote candidate: {:?}", candidate));
+                    let ice_candidate = RTCIceCandidateInit {
+                        candidate: candidate.candidate,
+                        sdp_mid: candidate.sdp_mid,
+                        sdp_mline_index: candidate.sdp_mline_index,
+                        username_fragment: None,
+                    };
+                    
+                    if let Err(e) = pc.add_ice_candidate(ice_candidate).await {
+                        log(&format!("Failed to add candidate: {:?}", e));
+                    }
+                }
+                
+                true
+            }
+            Err(e) => {
+                log(&format!("Failed to set remote description: {:?}", e));
+                false
+            }
+        }
+    } else {
+        log("No peer connection available");
+        false
+    }
 }

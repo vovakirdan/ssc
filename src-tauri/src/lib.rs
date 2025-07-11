@@ -19,6 +19,10 @@ pub fn run() {
             signaling::get_fingerprint,
             signaling::disconnect,
             signaling::is_connected,
+            webrtc_peer::add_ice_candidate,
+            webrtc_peer::generate_offer_with_candidates,
+            webrtc_peer::accept_offer_with_candidates,
+            webrtc_peer::set_answer_with_candidates,
             greet
         ])
         .run(tauri::generate_context!())
