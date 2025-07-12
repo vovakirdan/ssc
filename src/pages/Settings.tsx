@@ -5,11 +5,13 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Slider } from '@/components/ui/slider';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
-import { ArrowLeft, Shield, Server, Clock, Zap, Eye, EyeOff, Plus, Trash2, Info, RefreshCw, CheckCircle, XCircle, Loader } from 'lucide-react';
+import { Tooltip, TooltipProvider } from '@/components/ui/tooltip';
+import { ArrowLeft, Shield, Server, Clock, Zap, Eye, EyeOff, Plus, Trash2, Info, Download, CheckCircle, XCircle, Loader } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import StarBorder from '@/components/StarBorder';
 import ShinyText from '@/components/text/ShinyText';
+import AnimatedContent from '@/components/AnimatedContent';
+import FadeContent from '@/components/FadeContent';
 
 interface SettingsProps {
   onBack: () => void;
@@ -340,7 +342,6 @@ const Settings = ({ onBack }: SettingsProps) => {
                 </div>
 
                 <Tooltip>
-                  <TooltipTrigger asChild>
                     <Button
                       variant="ghost"
                       size="sm"
@@ -348,12 +349,8 @@ const Settings = ({ onBack }: SettingsProps) => {
                       disabled={isLoadingServers}
                       className="text-slate-400 hover:text-white"
                     >
-                      <RefreshCw className={`w-4 h-4 ${isLoadingServers ? 'animate-spin' : ''}`} />
+                      <Download className={`w-4 h-4 ${isLoadingServers ? 'animate-spin' : ''}`} />
                     </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    <p>Загрузить актуальные серверы</p>
-                  </TooltipContent>
                 </Tooltip>
               </div>
               
@@ -363,6 +360,9 @@ const Settings = ({ onBack }: SettingsProps) => {
             </CardHeader>
             <CardContent className="space-y-4">
               {(settings.servers || []).map((server) => (
+                <AnimatedContent
+                ease="bounce.out"
+                >
                 <div key={server.id} className="p-4 bg-slate-700/50 rounded-lg border border-slate-600">
                   <div className="flex items-center justify-between mb-3">
                     <div className="flex items-center space-x-2">
@@ -446,8 +446,11 @@ const Settings = ({ onBack }: SettingsProps) => {
                     )}
                   </div>
                 </div>
+                </AnimatedContent>
               ))}
-
+            <FadeContent
+                blur={true}
+            >
               <div className="flex flex-col sm:flex-row gap-2">
                 <StarBorder
                   onClick={() => addServer('stun')}
@@ -471,6 +474,7 @@ const Settings = ({ onBack }: SettingsProps) => {
                   Добавить TURN
                 </StarBorder>
               </div>
+            </FadeContent>
             </CardContent>
           </Card>
 
@@ -573,9 +577,9 @@ const Settings = ({ onBack }: SettingsProps) => {
             <Button
               onClick={handleReset}
               variant="outline"
-              className="flex-1 border-slate-600 text-slate-300 hover:bg-slate-700 hover:text-white"
+              className="flex-1 border-slate-600 text-slate-600 hover:bg-slate-700 hover:text-white"
             >
-              Сбросить к умолчанию
+              Сбросить
             </Button>
           </div>
 
