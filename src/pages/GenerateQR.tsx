@@ -21,10 +21,29 @@ const GenerateQR = ({ onBack, onConnected, autoGenerate }: GenerateQRProps) => {
   const [copied, setCopied] = useState(false);
   const [answer, setAnswer] = useState('');
   const [awaitingAnswer, setAwaitingAnswer] = useState(false);
-  // TTL для QR-кода (секунды)
-  const TTL = 300;
-  const [ttl, setTtl] = useState(TTL);
+  // TTL для QR-кода (секунды) - получаем из настроек
+  const [ttl, setTtl] = useState(300); // Дефолтное значение
   const timerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Загружаем TTL из настроек при монтировании компонента
+  useEffect(() => {
+    const loadTTL = () => {
+      try {
+        const savedSettings = localStorage.getItem('ssc-settings');
+        if (savedSettings) {
+          const parsedSettings = JSON.parse(savedSettings);
+          if (parsedSettings.offerTTL) {
+            // Конвертируем минуты в секунды
+            setTtl(parsedSettings.offerTTL * 60);
+          }
+        }
+      } catch (error) {
+        console.error('Error loading TTL from settings:', error);
+      }
+    };
+    
+    loadTTL();
+  }, []);
 
   // Слушаем событие успешного подключения
   useEffect(() => {
@@ -46,18 +65,18 @@ const GenerateQR = ({ onBack, onConnected, autoGenerate }: GenerateQRProps) => {
   // Обновляем TTL и перегенерируем QR-код по истечении времени
   useEffect(() => {
     if (!offer) {
-      setTtl(TTL);
       if (timerRef.current) clearInterval(timerRef.current);
       return;
     }
-    setTtl(TTL);
+    // Получаем текущий TTL из состояния
+    const currentTTL = ttl;
     if (timerRef.current) clearInterval(timerRef.current);
     timerRef.current = setInterval(() => {
       setTtl(prev => {
         if (prev <= 1) {
           // Время истекло — генерируем новый QR-код
           generateOffer();
-          return TTL;
+          return currentTTL;
         }
         return prev - 1;
       });
@@ -65,7 +84,7 @@ const GenerateQR = ({ onBack, onConnected, autoGenerate }: GenerateQRProps) => {
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
     };
-  }, [offer]);
+  }, [offer, ttl]);
 
   const generateOffer = async () => {
     setLoading(true);
@@ -143,7 +162,7 @@ const GenerateQR = ({ onBack, onConnected, autoGenerate }: GenerateQRProps) => {
                   <div className="flex justify-between items-center mb-2">
                     <span className="text-xs text-slate-500">QR-код истечёт через {ttl} сек.</span>
                     <div className="w-32 h-2 bg-slate-300 rounded overflow-hidden">
-                      <div className="h-2 bg-emerald-500 transition-all" style={{ width: `${(ttl/TTL)*100}%` }} />
+                      <div className="h-2 bg-emerald-500 transition-all" style={{ width: `${(ttl/300)*100}%` }} />
                     </div>
                   </div>
                   <div className="w-full aspect-square bg-slate-200 rounded flex items-center justify-center relative">

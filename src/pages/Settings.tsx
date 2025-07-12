@@ -12,6 +12,7 @@ import StarBorder from '@/components/StarBorder';
 import ShinyText from '@/components/text/ShinyText';
 import AnimatedContent from '@/components/AnimatedContent';
 import FadeContent from '@/components/FadeContent';
+// import { invoke } from "@tauri-apps/api";
 
 interface SettingsProps {
   onBack: () => void;
@@ -81,7 +82,7 @@ const Settings = ({ onBack }: SettingsProps) => {
     updateServer(server.id, { status: 'validating' });
 
     try {
-      // Имитируем проверку доступности сервера
+      // Временная моковая проверка (будет заменена на реальную)
       await new Promise(resolve => setTimeout(resolve, 1500));
       
       // Простая валидация URL
@@ -137,7 +138,7 @@ const Settings = ({ onBack }: SettingsProps) => {
     }
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     // Проверяем, что есть хотя бы один сервер
     if (!settings.servers || settings.servers.length === 0) {
       toast({

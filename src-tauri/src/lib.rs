@@ -12,6 +12,12 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
+            // Settings commands
+            signaling::initialize_settings,
+            signaling::get_settings,
+            signaling::save_settings,
+            signaling::validate_server,
+            
             // Legacy API
             signaling::generate_offer,
             signaling::accept_offer_and_create_answer,

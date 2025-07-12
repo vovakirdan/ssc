@@ -1,5 +1,45 @@
 use crate::webrtc_peer::{self, APP};
 use tauri::{command, AppHandle}; // import APP to store
+use serde::{Deserialize, Serialize};
+
+// ========== TYPES ==========
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ServerConfig {
+    pub id: String,
+    pub r#type: String, // 'stun' or 'turn'
+    pub url: String,
+    pub username: Option<String>,
+    pub credential: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct SettingsData {
+    pub servers: Vec<ServerConfig>,
+    pub offer_ttl: u64,
+}
+
+// ========== SETTINGS COMMANDS ==========
+
+#[command]
+pub async fn get_settings() -> Option<SettingsData> {
+    webrtc_peer::get_settings().await
+}
+
+#[command]
+pub async fn save_settings(settings: SettingsData) -> bool {
+    webrtc_peer::save_settings(settings).await
+}
+
+#[command]
+pub async fn validate_server(server: ServerConfig) -> bool {
+    webrtc_peer::validate_server(server).await
+}
+
+#[command]
+pub async fn initialize_settings() {
+    webrtc_peer::initialize_settings().await
+}
 
 // ========== OLD API (LEGACY) ==========
 

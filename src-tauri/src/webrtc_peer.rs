@@ -31,6 +31,23 @@ use webrtc::peer_connection::policy::bundle_policy::RTCBundlePolicy;
 use webrtc::peer_connection::policy::rtcp_mux_policy::RTCRtcpMuxPolicy;
 use webrtc::ice_transport::ice_candidate::RTCIceCandidateInit;
 
+// ========== SETTINGS TYPES ==========
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ServerConfig {
+    pub id: String,
+    pub r#type: String, // 'stun' or 'turn'
+    pub url: String,
+    pub username: Option<String>,
+    pub credential: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct SettingsData {
+    pub servers: Vec<ServerConfig>,
+    pub offer_ttl: u64,
+}
+
 /// ========== GLOBAL STATE ==========
 
 /// WebRTC Peer Connection
@@ -67,6 +84,9 @@ static LOCAL_CANDIDATES: Lazy<Mutex<Vec<IceCandidate>>> = Lazy::new(|| Mutex::ne
 
 /// Флаг активного сбора кандидатов
 static COLLECTING_CANDIDATES: Lazy<Mutex<bool>> = Lazy::new(|| Mutex::new(false));
+
+/// Текущие настройки приложения
+static CURRENT_SETTINGS: Lazy<Mutex<Option<SettingsData>>> = Lazy::new(|| Mutex::new(None));
 
 /// ========== CONSTANTS ==========
 
@@ -187,38 +207,52 @@ async fn dump_selected_pair(pc: &RTCPeerConnection, moment: &str) {
 }
 
 fn rtc_config() -> RTCConfiguration {
+    // Получаем настройки из глобальной переменной
+    let settings = CURRENT_SETTINGS.lock().unwrap().clone();
+    
+    let mut ice_servers = Vec::new();
+    
+    // Если настройки не найдены или серверы пусты, используем дефолтные
+    if settings.is_none() || settings.as_ref().unwrap().servers.is_empty() {
+        ice_servers.push(RTCIceServer {
+            urls: vec!["stun:stun.l.google.com:19302".into()],
+            ..Default::default()
+        });
+    } else {
+        let settings = settings.unwrap();
+        // Группируем серверы по типу для оптимизации
+        let mut stun_urls = Vec::new();
+        let mut turn_servers = Vec::new();
+        
+        for server in &settings.servers {
+            if server.r#type == "stun" {
+                stun_urls.push(server.url.clone());
+            } else if server.r#type == "turn" {
+                turn_servers.push(server.clone());
+            }
+        }
+        
+        // Добавляем STUN серверы
+        if !stun_urls.is_empty() {
+            ice_servers.push(RTCIceServer {
+                urls: stun_urls,
+                ..Default::default()
+            });
+        }
+        
+        // Добавляем TURN серверы
+        for server in turn_servers {
+            ice_servers.push(RTCIceServer {
+                urls: vec![server.url.clone()],
+                username: server.username.unwrap_or_default(),
+                credential: server.credential.unwrap_or_default(),
+                ..Default::default()
+            });
+        }
+    }
+    
     RTCConfiguration {
-        ice_servers: vec![
-            // STUN серверы
-            RTCIceServer {
-                urls: vec![
-                    "stun:stun.l.google.com:19302".into(),
-                    "stun:stun1.l.google.com:19302".into(),
-                    "stun:stun2.l.google.com:19302".into(),
-                    "stun:stun3.l.google.com:19302".into(),
-                ],
-                ..Default::default()
-            },
-            // TURN серверы с разными портами
-            RTCIceServer {
-                urls: vec![
-                    "turn:global.relay.metered.ca:80".into(),
-                    "turn:global.relay.metered.ca:80?transport=tcp".into(),
-                ],
-                username: "780f40cf85d42703e9fd4d35".into(), // don't worry. Thats temp creds
-                credential: "BmtggDCoW5ZDaonw".into(), // don't worry. Thats temp creds
-                ..Default::default()
-            },
-            RTCIceServer {
-                urls: vec![
-                    "turn:global.relay.metered.ca:443".into(),
-                    "turn:global.relay.metered.ca:443?transport=tcp".into(),
-                ],
-                username: "780f40cf85d42703e9fd4d35".into(), // don't worry. Thats temp creds
-                credential: "BmtggDCoW5ZDaonw".into(), // don't worry. Thats temp creds
-                ..Default::default()
-            },
-        ],
+        ice_servers,
         // Добавляем более агрессивные настройки ICE
         ice_candidate_pool_size: 10,
         bundle_policy: RTCBundlePolicy::MaxBundle,
@@ -1170,5 +1204,132 @@ pub async fn set_answer_with_candidates(encoded: String) -> bool {
     } else {
         log("No peer connection available");
         false
+    }
+}
+
+/// ========== SETTINGS FUNCTIONS ==========
+
+/// Получение настроек из localStorage
+fn get_settings_from_storage() -> SettingsData {
+    // В Tauri мы не можем напрямую обращаться к localStorage
+    // Поэтому возвращаем дефолтные настройки
+    // Фронтенд будет передавать настройки через команды
+    SettingsData {
+        servers: vec![
+            ServerConfig {
+                id: "1".to_string(),
+                r#type: "stun".to_string(),
+                url: "stun:stun.l.google.com:19302".to_string(),
+                username: None,
+                credential: None,
+            }
+        ],
+        offer_ttl: 300, // 5 минут по умолчанию
+    }
+}
+
+/// Инициализация настроек при старте приложения
+pub async fn initialize_settings() {
+    // Устанавливаем дефолтные настройки
+    let default_settings = get_settings_from_storage();
+    *CURRENT_SETTINGS.lock().unwrap() = Some(default_settings);
+    log("Settings initialized with defaults");
+}
+
+/// Получение настроек (команда для фронтенда)
+pub async fn get_settings() -> Option<SettingsData> {
+    CURRENT_SETTINGS.lock().unwrap().clone()
+}
+
+/// Сохранение настроек (команда для фронтенда)
+pub async fn save_settings(settings: SettingsData) -> bool {
+    log(&format!("Settings saved: {} servers, TTL: {} seconds", 
+        settings.servers.len(), settings.offer_ttl));
+    *CURRENT_SETTINGS.lock().unwrap() = Some(settings);
+    true
+}
+
+/// Проверка доступности сервера
+pub async fn validate_server(server: ServerConfig) -> bool {
+    log(&format!("Validating server: {} ({})", server.url, server.r#type));
+    
+    // Проверяем формат URL
+    if !server.url.starts_with("stun:") && !server.url.starts_with("turn:") && !server.url.starts_with("turns:") {
+        log("Invalid URL format");
+        return false;
+    }
+    
+    // Для TURN серверов проверяем наличие учетных данных
+    if server.r#type == "turn" && (server.username.is_none() || server.credential.is_none()) {
+        log("TURN server requires username and credential");
+        return false;
+    }
+    
+    // Создаем временное WebRTC соединение для проверки сервера
+    let config = RTCConfiguration {
+        ice_servers: vec![RTCIceServer {
+            urls: vec![server.url.clone()],
+            username: server.username.clone().unwrap_or_default(),
+            credential: server.credential.clone().unwrap_or_default(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    
+    match APIBuilder::new().build().new_peer_connection(config).await {
+        Ok(pc) => {
+            // Создаем offer для активации ICE
+            match pc.create_offer(None).await {
+                Ok(offer) => {
+                    match pc.set_local_description(offer).await {
+                        Ok(_) => {
+                            // Ждем немного для сбора кандидатов
+                            tokio::time::sleep(Duration::from_secs(2)).await;
+                            
+                            // Проверяем, есть ли кандидаты
+                            let stats = pc.get_stats().await;
+                            let mut has_candidates = false;
+                            
+                            for (_, v) in stats.reports {
+                                match v {
+                                    webrtc::stats::StatsReportType::Candidate(candidate) => {
+                                        if !candidate.candidate_type.is_empty() {
+                                            has_candidates = true;
+                                            break;
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            
+                            // Закрываем соединение
+                            let _ = pc.close().await;
+                            
+                            if has_candidates {
+                                log(&format!("Server {} is accessible", server.url));
+                                true
+                            } else {
+                                log(&format!("Server {} is not accessible (no candidates)", server.url));
+                                false
+                            }
+                        }
+                        Err(e) => {
+                            log(&format!("Failed to set local description: {:?}", e));
+                            let _ = pc.close().await;
+                            false
+                        }
+                    }
+                }
+                Err(e) => {
+                    log(&format!("Failed to create offer: {:?}", e));
+                    let _ = pc.close().await;
+                    false
+                }
+            }
+        }
+        Err(e) => {
+            log(&format!("Failed to create peer connection: {:?}", e));
+            false
+        }
     }
 }
