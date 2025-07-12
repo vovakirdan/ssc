@@ -6,7 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Slider } from '@/components/ui/slider';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Tooltip, TooltipProvider } from '@/components/ui/tooltip';
-import { ArrowLeft, Shield, Server, Clock, Zap, Eye, EyeOff, Plus, Trash2, Info, Download, CheckCircle, XCircle, Loader } from 'lucide-react';
+import { ArrowLeft, Shield, Server, Clock, Zap, Eye, EyeOff, Plus, Trash2, Info, CloudDownload, CheckCircle, XCircle, Loader, Glasses } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import StarBorder from '@/components/StarBorder';
 import ShinyText from '@/components/text/ShinyText';
@@ -322,21 +322,108 @@ const Settings = ({ onBack }: SettingsProps) => {
                         <Info className="w-4 h-4 text-slate-400 hover:text-white" />
                       </Button>
                     </DialogTrigger>
-                    <DialogContent className="bg-slate-800 border-slate-700 text-white">
+                    <DialogContent className="bg-slate-800 border-slate-700 text-white max-w-4xl max-h-[90vh] overflow-y-auto">
                       <DialogHeader>
-                        <DialogTitle className="text-cyan-500">STUN/TURN серверы</DialogTitle>
-                        <DialogDescription className="text-slate-300 space-y-3">
-                          <p>
-                            <strong>STUN</strong> (Session Traversal Utilities for NAT) - помогает определить ваш публичный IP-адрес и тип NAT для прямого P2P соединения.
-                          </p>
-                          <p>
-                            <strong>TURN</strong> (Traversal Using Relays around NAT) - ретранслирует трафик через промежуточный сервер, когда прямое соединение невозможно.
-                          </p>
-                          <p>
-                            Эти серверы необходимы для установки безопасного P2P соединения между устройствами через интернет.
-                          </p>
+                        <DialogTitle className="text-cyan-500 text-xl">STUN/TURN серверы</DialogTitle>
+                        <DialogDescription className="text-slate-300 text-base leading-relaxed">
+                          Подробная информация о серверах для P2P соединения
                         </DialogDescription>
                       </DialogHeader>
+                      
+                      <div className="space-y-4 text-slate-200 leading-relaxed">
+                        <div className="space-y-3">
+                          <p>
+                            <strong className="text-cyan-400">STUN</strong> (Session Traversal Utilities for NAT) - помогает определить ваш публичный IP-адрес и тип NAT для прямого P2P соединения. Отличный вариант в рамках одной сети.
+                          </p>
+                          <p>
+                            <strong className="text-purple-400">TURN</strong> (Traversal Using Relays around NAT) - ретранслирует трафик через промежуточный сервер, когда прямое соединение невозможно.
+                          </p>
+                          <p>
+                            Эти серверы необходимы для установки <strong className="text-emerald-400">безопасного</strong> P2P соединения между устройствами через интернет.
+                          </p>
+                        </div>
+
+                        <div className="bg-slate-700/50 p-4 rounded-lg border border-slate-600">
+                          <h4 className="font-semibold text-yellow-400 mb-2">Рекомендации по использованию</h4>
+                          <p className="mb-2">
+                            По умолчанию предоставляются бесплатные сервера. Если у вас есть ошибки с соединением, попробуйте загрузить актуальные сервера.
+                          </p>
+                          <p>
+                            Если после этого проблема не решена, рекомендуется получить свои <strong className="text-purple-400">TURN</strong> сервера на одном из ресурсов:
+                          </p>
+                        </div>
+
+                        <div className="bg-slate-700/30 p-4 rounded-lg">
+                          <h4 className="font-semibold text-blue-400 mb-3">Рекомендуемые провайдеры TURN серверов</h4>
+                          <ul className="space-y-2">
+                            <li className="flex items-center">
+                              <span className="w-2 h-2 bg-emerald-400 rounded-full mr-3"></span>
+                              <a 
+                                href="https://www.expressturn.com/" 
+                                target="_blank" 
+                                rel="noopener noreferrer"
+                                className="text-blue-300 hover:text-blue-200 underline decoration-dotted"
+                              >
+                                expressturn.com
+                              </a>
+                              <span className="text-slate-400 ml-2">- 10 GB бесплатно</span>
+                            </li>
+                            <li className="flex items-center">
+                              <span className="w-2 h-2 bg-emerald-400 rounded-full mr-3"></span>
+                              <a 
+                                href="https://www.metered.ca/" 
+                                target="_blank" 
+                                rel="noopener noreferrer"
+                                className="text-blue-300 hover:text-blue-200 underline decoration-dotted"
+                              >
+                                metered.ca
+                              </a>
+                              <span className="text-slate-400 ml-2">- 20 GB бесплатно</span>
+                            </li>
+                          </ul>
+                        </div>
+
+                        <div className="bg-slate-700/30 p-4 rounded-lg">
+                          <h4 className="font-semibold text-orange-400 mb-3">Информация о задержках</h4>
+                          <p className="mb-3 text-slate-300">
+                            Вы можете поделиться своими серверами с другими пользователями. При этом неважно, будут ли сервера одинаковые при подключении. 
+                            Учитывайте, что чем дальше от вас сервер и чем больше узлов, тем больше задержка.
+                          </p>
+                          
+                          <div className="space-y-2">
+                            <h5 className="font-medium text-slate-200">Приблизительные задержки:</h5>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
+                              <div className="flex justify-between bg-green-900/20 px-3 py-2 rounded border-l-2 border-green-500">
+                                <span>Прямое соединение (P2P)</span>
+                                <span className="text-green-400 font-mono">20-50ms</span>
+                              </div>
+                              <div className="flex justify-between bg-blue-900/20 px-3 py-2 rounded border-l-2 border-blue-500">
+                                <span>TURN (тот же регион)</span>
+                                <span className="text-blue-400 font-mono">70-150ms</span>
+                              </div>
+                              <div className="flex justify-between bg-yellow-900/20 px-3 py-2 rounded border-l-2 border-yellow-500">
+                                <span>TURN (другой континент)</span>
+                                <span className="text-yellow-400 font-mono">200-400ms</span>
+                              </div>
+                              <div className="flex justify-between bg-orange-900/20 px-3 py-2 rounded border-l-2 border-orange-500">
+                                <span>Два TURN (разные регионы)</span>
+                                <span className="text-orange-400 font-mono">250-500ms</span>
+                              </div>
+                              <div className="flex justify-between bg-red-900/20 px-3 py-2 rounded border-l-2 border-red-500 sm:col-span-2">
+                                <span>Два TURN (разные континенты)</span>
+                                <span className="text-red-400 font-mono">400-800ms</span>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="bg-slate-700/50 p-4 rounded-lg border border-slate-600">
+                          <p className="text-sm text-slate-400 italic">
+                            <Glasses className="w-4 h-4 text-yellow-400 inline-block mr-2" />
+                            Совет: Для наилучшей производительности используйте серверы, расположенные ближе к вашему географическому местоположению.
+                          </p>
+                        </div>
+                      </div>
                     </DialogContent>
                   </Dialog>
                 </div>
@@ -349,7 +436,7 @@ const Settings = ({ onBack }: SettingsProps) => {
                       disabled={isLoadingServers}
                       className="text-slate-400 hover:text-white"
                     >
-                      <Download className={`w-4 h-4 ${isLoadingServers ? 'animate-spin' : ''}`} />
+                      <CloudDownload className={`w-4 h-4 ${isLoadingServers ? 'animate-spin' : ''}`} />
                     </Button>
                 </Tooltip>
               </div>
