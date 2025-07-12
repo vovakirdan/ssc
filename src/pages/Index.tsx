@@ -5,8 +5,9 @@ import ScanQR from './ScanQR';
 import Chat from './Chat';
 import VerifyFingerprint from './VerifyFingerprint';
 import GradientText from '@/components/text/GradientText';
+import Settings from './Settings';
 
-type AppMode = 'welcome' | 'generate' | 'scan' | 'verify' | 'chat';
+type AppMode = 'welcome' | 'generate' | 'scan' | 'verify' | 'chat' | 'settings';
 
 const Index = () => {
   const [mode, setMode] = useState<AppMode>('welcome');
@@ -19,15 +20,24 @@ const Index = () => {
   const handleBack = () => {
     if (showOptions) {
       setShowOptions(false);
+      setMode('welcome');
     } else {
       setMode('welcome');
     }
+  };
+
+  const handleSettings = () => {
+    setMode('settings');
   };
 
   const handleConnected = () => {
     console.log('Index: handleConnected called - switching to verify mode');
     setMode('verify');
   };
+
+  if (mode === 'settings') {
+    return <Settings onBack={handleBack} />;
+  }
 
   if (mode === 'chat') {
     return <Chat onBack={() => setMode('welcome')} />;
@@ -93,7 +103,7 @@ const Index = () => {
     );
   }
 
-  return <Welcome onStart={handleStart} />;
+  return <Welcome onStart={handleStart} onSettings={handleSettings} />;
 };
 
 export default Index;
