@@ -8,6 +8,8 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { ArrowLeft, Shield, Server, Clock, Zap, Eye, EyeOff, Plus, Trash2, Info, RefreshCw, CheckCircle, XCircle, Loader } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
+import StarBorder from '@/components/StarBorder';
+import ShinyText from '@/components/text/ShinyText';
 
 interface SettingsProps {
   onBack: () => void;
@@ -447,23 +449,27 @@ const Settings = ({ onBack }: SettingsProps) => {
               ))}
 
               <div className="flex flex-col sm:flex-row gap-2">
-                <Button
+                <StarBorder
                   onClick={() => addServer('stun')}
-                  variant="outline"
-                  className="flex-1 border-slate-600 text-slate-300 hover:bg-slate-700 hover:text-white"
+                  as="button"
+                  color="cyan"
+                  speed="5s"
+                  className="flex-1 border-slate-600 text-slate-600 py-1"
                 >
                   <Plus className="w-4 h-4 mr-2" />
                   Добавить STUN
-                </Button>
+                </StarBorder>
                 
-                <Button
+                <StarBorder
                   onClick={() => addServer('turn')}
-                  variant="outline"
-                  className="flex-1 border-slate-600 text-slate-300 hover:bg-slate-700 hover:text-white"
+                  as="button"
+                  color="purple"
+                  speed="5s"
+                  className="flex-1 border-slate-600 text-slate-600 py-1"
                 >
                   <Plus className="w-4 h-4 mr-2" />
                   Добавить TURN
-                </Button>
+                </StarBorder>
               </div>
             </CardContent>
           </Card>
@@ -520,7 +526,7 @@ const Settings = ({ onBack }: SettingsProps) => {
                   className="text-slate-400 cursor-pointer hover:text-white transition-colors"
                   onClick={handleVersionClick}
                 >
-                  v1.0.0-phantom
+                  <ShinyText text="v1.0.0-phantom" />
                 </span>
               </div>
 
