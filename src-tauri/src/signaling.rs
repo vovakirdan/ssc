@@ -1,23 +1,5 @@
-use crate::webrtc_peer::{self, APP};
+use crate::webrtc_peer::{self, APP, ServerConfig, SettingsData};
 use tauri::{command, AppHandle}; // import APP to store
-use serde::{Deserialize, Serialize};
-
-// ========== TYPES ==========
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct ServerConfig {
-    pub id: String,
-    pub r#type: String, // 'stun' or 'turn'
-    pub url: String,
-    pub username: Option<String>,
-    pub credential: Option<String>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct SettingsData {
-    pub servers: Vec<ServerConfig>,
-    pub offer_ttl: u64,
-}
 
 // ========== SETTINGS COMMANDS ==========
 

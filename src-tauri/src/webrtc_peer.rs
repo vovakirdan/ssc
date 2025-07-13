@@ -1265,70 +1265,136 @@ pub async fn validate_server(server: ServerConfig) -> bool {
         return false;
     }
     
-    // Создаем временное WebRTC соединение для проверки сервера
-    let config = RTCConfiguration {
-        ice_servers: vec![RTCIceServer {
-            urls: vec![server.url.clone()],
-            username: server.username.clone().unwrap_or_default(),
-            credential: server.credential.clone().unwrap_or_default(),
-            ..Default::default()
-        }],
+    // Используем более надежную проверку через ICE gathering
+    check_ice_server_availability(server).await
+}
+
+/// Проверка доступности ICE сервера через gathering состояние
+async fn check_ice_server_availability(config: ServerConfig) -> bool {
+    use tokio::sync::mpsc;
+    use webrtc::ice_transport::ice_gathering_state::RTCIceGatheringState;
+    use webrtc::ice_transport::ice_credential_type::RTCIceCredentialType;
+    
+    // Создаем ICE сервер из конфигурации
+    let ice_server = RTCIceServer {
+        urls: vec![config.url.clone()],
+        username: config.username.clone().unwrap_or_default(),
+        credential: config.credential.clone().unwrap_or_default(),
+        credential_type: RTCIceCredentialType::Password,
+    };
+
+    // Создаем конфигурацию для peer connection
+    let rtc_config = RTCConfiguration {
+        ice_servers: vec![ice_server],
         ..Default::default()
     };
+
+    // Создаем API и peer connection
+    let api = APIBuilder::new().build();
     
-    match APIBuilder::new().build().new_peer_connection(config).await {
-        Ok(pc) => {
-            // Создаем offer для активации ICE
-            match pc.create_offer(None).await {
-                Ok(offer) => {
-                    match pc.set_local_description(offer).await {
-                        Ok(_) => {
-                            // Ждем немного для сбора кандидатов
-                            tokio::time::sleep(Duration::from_secs(2)).await;
-                            
-                            // Проверяем, есть ли кандидаты
-                            let stats = pc.get_stats().await;
-                            let mut has_candidates = false;
-                            
-                            for (_, v) in stats.reports {
-                                match v {
-                                    webrtc::stats::StatsReportType::Candidate(candidate) => {
-                                        if !candidate.candidate_type.is_empty() {
-                                            has_candidates = true;
-                                            break;
-                                        }
-                                    }
-                                    _ => {}
-                                }
-                            }
-                            
-                            // Закрываем соединение
-                            let _ = pc.close().await;
-                            
-                            if has_candidates {
-                                log(&format!("Server {} is accessible", server.url));
-                                true
-                            } else {
-                                log(&format!("Server {} is not accessible (no candidates)", server.url));
-                                false
-                            }
-                        }
-                        Err(e) => {
-                            log(&format!("Failed to set local description: {:?}", e));
-                            let _ = pc.close().await;
-                            false
-                        }
+    match api.new_peer_connection(rtc_config).await {
+        Ok(peer_connection) => {
+            // Проверяем доступность через gathering состояние
+            check_via_ice_gathering(peer_connection, &config.r#type).await
+        }
+        Err(_) => {
+            log(&format!("Failed to create peer connection for {}", config.url));
+            false
+        }
+    }
+}
+
+async fn check_via_ice_gathering(
+    peer_connection: Arc<RTCPeerConnection>,
+    server_type: &str,
+) -> bool {
+    use tokio::sync::mpsc;
+    use webrtc::ice_transport::ice_gathering_state::RTCIceGatheringState;
+    
+    let (tx, mut rx) = mpsc::channel(10);
+    let tx_clone = tx.clone();
+    
+    // Подписываемся на изменения состояния gathering
+    peer_connection.on_ice_gathering_state_change(Box::new(move |state| {
+        let tx = tx_clone.clone();
+        tokio::spawn(async move {
+            let _ = tx.send(state).await;
+        });
+        Box::pin(async {})
+    })).await;
+
+    // Подписываемся на ICE кандидатов
+    let (candidate_tx, mut candidate_rx) = mpsc::channel(10);
+    let server_type_clone = server_type.to_string();
+    
+    peer_connection.on_ice_candidate(Box::new(move |candidate| {
+        let tx = candidate_tx.clone();
+        let server_type = server_type_clone.clone();
+        
+        Box::pin(async move {
+            if let Some(c) = candidate {
+                // Проверяем тип кандидата
+                let candidate_type = c.to_json().await.map(|json| {
+                    // Для STUN серверов ищем srflx кандидатов
+                    // Для TURN серверов ищем relay кандидатов
+                    if server_type == "stun" && json.candidate.contains("srflx") {
+                        true
+                    } else if server_type == "turn" && json.candidate.contains("relay") {
+                        true
+                    } else {
+                        false
                     }
+                }).unwrap_or(false);
+                
+                if candidate_type {
+                    let _ = tx.send(true).await;
                 }
-                Err(e) => {
-                    log(&format!("Failed to create offer: {:?}", e));
-                    let _ = pc.close().await;
+            }
+        })
+    })).await;
+
+    // Создаем data channel для инициации ICE gathering
+    match peer_connection.create_data_channel("test", None).await {
+        Ok(_) => {},
+        Err(_) => return false,
+    }
+
+    // Создаем offer для запуска ICE gathering
+    match peer_connection.create_offer(None).await {
+        Ok(offer) => {
+            if let Err(_) = peer_connection.set_local_description(offer).await {
+                return false;
+            }
+        }
+        Err(_) => return false,
+    }
+
+    // Ждем результат с таймаутом
+    let check_timeout = Duration::from_secs(10);
+    
+    tokio::select! {
+        // Ждем подходящего кандидата
+        result = timeout(check_timeout, candidate_rx.recv()) => {
+            match result {
+                Ok(Some(true)) => {
+                    let _ = peer_connection.close().await;
+                    true
+                },
+                _ => {
+                    let _ = peer_connection.close().await;
                     false
                 }
             }
         }
-        Err(e) => {
-            log(&format!("Failed to create peer connection: {:?}", e));
+        // Или ждем failed состояния
+        _ = async {
+            while let Some(state) = rx.recv().await {
+                if state == RTCIceGatheringState::Complete {
+                    break;
+                }
+            }
+        } => {
+            let _ = peer_connection.close().await;
             false
         }
     }

@@ -8,6 +8,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { QRCodeSVG } from 'qrcode.react';
 import { QRCodeCanvas } from 'qrcode.react';
+import { useSettings } from '@/hooks/use-settings';
 
 interface GenerateQRProps {
   onBack: () => void;
@@ -21,29 +22,18 @@ const GenerateQR = ({ onBack, onConnected, autoGenerate }: GenerateQRProps) => {
   const [copied, setCopied] = useState(false);
   const [answer, setAnswer] = useState('');
   const [awaitingAnswer, setAwaitingAnswer] = useState(false);
+  const { settings } = useSettings();
   // TTL для QR-кода (секунды) - получаем из настроек
   const [ttl, setTtl] = useState(300); // Дефолтное значение
   const timerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Загружаем TTL из настроек при монтировании компонента
   useEffect(() => {
-    const loadTTL = () => {
-      try {
-        const savedSettings = localStorage.getItem('ssc-settings');
-        if (savedSettings) {
-          const parsedSettings = JSON.parse(savedSettings);
-          if (parsedSettings.offerTTL) {
-            // Конвертируем минуты в секунды
-            setTtl(parsedSettings.offerTTL * 60);
-          }
-        }
-      } catch (error) {
-        console.error('Error loading TTL from settings:', error);
-      }
-    };
-    
-    loadTTL();
-  }, []);
+    if (settings.offerTTL) {
+      // Конвертируем минуты в секунды
+      setTtl(settings.offerTTL * 60);
+    }
+  }, [settings.offerTTL]);
 
   // Слушаем событие успешного подключения
   useEffect(() => {

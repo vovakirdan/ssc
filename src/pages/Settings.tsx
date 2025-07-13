@@ -12,108 +12,41 @@ import StarBorder from '@/components/StarBorder';
 import ShinyText from '@/components/text/ShinyText';
 import AnimatedContent from '@/components/AnimatedContent';
 import FadeContent from '@/components/FadeContent';
-// import { invoke } from "@tauri-apps/api";
+import { useSettings, type ServerConfig, type SettingsData } from '@/hooks/use-settings';
+import { invoke } from "@tauri-apps/api/core";
 
 interface SettingsProps {
   onBack: () => void;
 }
 
-interface ServerConfig {
-  id: string;
-  type: 'stun' | 'turn';
-  url: string;
-  username?: string;
-  credential?: string;
-  status?: 'validating' | 'valid' | 'invalid' | 'idle';
-}
-
-interface SettingsData {
-  servers: ServerConfig[];
-  offerTTL: number;
-}
-
 const TTL_VALUES = [1, 2, 5, 10, 60]; // minutes
 
 const Settings = ({ onBack }: SettingsProps) => {
-  const [settings, setSettings] = useState<SettingsData>({
-    servers: [
-      {
-        id: '1',
-        type: 'stun',
-        url: 'stun:stun.l.google.com:19302'
-      }
-    ],
-    offerTTL: 5
-  });
-
+  const { settings, setSettings, saveSettings, validateServer, loading } = useSettings();
   const [showCredentials, setShowCredentials] = useState<{[key: string]: boolean}>({});
   const [easterEgg, setEasterEgg] = useState(false);
   const [clickCount, setClickCount] = useState(0);
   const [isLoadingServers, setIsLoadingServers] = useState(false);
   const { toast } = useToast();
 
-  useEffect(() => {
-    // Загружаем настройки из localStorage
-    const savedSettings = localStorage.getItem('ssc-settings');
-    if (savedSettings) {
-      try {
-        const parsedSettings = JSON.parse(savedSettings);
-        // Ensure servers array exists and has valid structure
-        const validatedSettings: SettingsData = {
-          servers: Array.isArray(parsedSettings.servers) ? parsedSettings.servers : [
-            {
-              id: '1',
-              type: 'stun',
-              url: 'stun:stun.l.google.com:19302'
-            }
-          ],
-          offerTTL: typeof parsedSettings.offerTTL === 'number' ? parsedSettings.offerTTL : 5
-        };
-        setSettings(validatedSettings);
-      } catch (error) {
-        console.error('Error parsing saved settings:', error);
-        // Keep default settings if parsing fails
-      }
-    }
-  }, []);
-
-  const validateServer = async (server: ServerConfig) => {
+  const validateServerLocal = async (server: ServerConfig) => {
     // Обновляем статус на "проверяется"
     updateServer(server.id, { status: 'validating' });
 
     try {
-      // Временная моковая проверка (будет заменена на реальную)
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      
-      // Простая валидация URL
-      const isValidUrl = server.url && (
-        server.url.startsWith('stun:') || 
-        server.url.startsWith('turn:') || 
-        server.url.startsWith('turns:')
-      );
+      // Вызываем Rust функцию для проверки сервера
+      const isValid = await validateServer(server);
 
-      if (!isValidUrl) {
-        throw new Error('Invalid URL format');
+      if (isValid) {
+        updateServer(server.id, { status: 'valid' });
+        
+        toast({
+          title: "Сервер доступен",
+          description: `${server.type.toUpperCase()} сервер успешно проверен`,
+        });
+      } else {
+        throw new Error('Server validation failed');
       }
-
-      // Для TURN серверов проверяем наличие учетных данных
-      if (server.type === 'turn' && (!server.username || !server.credential)) {
-        throw new Error('TURN server requires username and credential');
-      }
-
-      // Моковая проверка доступности (в реальности здесь будет проверка подключения)
-      const isAccessible = Math.random() > 0.3; // 70% шанс успеха для демо
-      
-      if (!isAccessible) {
-        throw new Error('Server is not accessible');
-      }
-
-      updateServer(server.id, { status: 'valid' });
-      
-      toast({
-        title: "Сервер доступен",
-        description: `${server.type.toUpperCase()} сервер успешно проверен`,
-      });
     } catch (error) {
       updateServer(server.id, { status: 'invalid' });
       
@@ -160,14 +93,28 @@ const Settings = ({ onBack }: SettingsProps) => {
       return;
     }
 
-    // Сохраняем настройки в localStorage
-    localStorage.setItem('ssc-settings', JSON.stringify(settings));
-    console.log('Settings saved:', settings);
-    toast({
-      title: "Успешно",
-      description: "Настройки сохранены"
-    });
-    onBack();
+    try {
+      // Сохраняем настройки через хук
+      const success = await saveSettings(settings);
+
+      if (success) {
+        console.log('Settings saved:', settings);
+        toast({
+          title: "Успешно",
+          description: "Настройки сохранены"
+        });
+        onBack();
+      } else {
+        throw new Error('Failed to save settings');
+      }
+    } catch (error) {
+      toast({
+        title: "Ошибка",
+        description: "Не удалось сохранить настройки",
+        variant: "destructive"
+      });
+      console.error('Error saving settings:', error);
+    }
   };
 
   const handleReset = () => {
@@ -464,7 +411,7 @@ const Settings = ({ onBack }: SettingsProps) => {
                         <Button
                           variant="ghost"
                           size="sm"
-                          onClick={() => validateServer(server)}
+                          onClick={() => validateServerLocal(server)}
                           disabled={server.status === 'validating'}
                           className="text-blue-400 hover:text-blue-300 hover:bg-blue-900/20"
                         >
