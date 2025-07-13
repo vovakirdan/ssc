@@ -1,0 +1,52 @@
+name: Sign Applications
+
+on:
+  workflow_run:
+    workflows: ["Simple Build and Release"]
+    types:
+      - completed
+    branches: [main]
+
+jobs:
+  sign-apps:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      # Подпись Windows приложений (если есть сертификат)
+      - name: Sign Windows apps
+        if: env.WINDOWS_CERTIFICATE != ''
+        run: |
+          # Здесь будет логика подписи Windows приложений
+          echo "Signing Windows applications..."
+          # Пример: signtool sign /f ${{ secrets.WINDOWS_CERTIFICATE }} /p ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }} artifacts/windows-artifacts-*/ssc-setup.exe
+
+      # Подпись macOS приложений (если есть сертификат)
+      - name: Sign macOS apps
+        if: env.MACOS_CERTIFICATE != ''
+        run: |
+          # Здесь будет логика подписи macOS приложений
+          echo "Signing macOS applications..."
+          # Пример: codesign --force --sign "Developer ID Application: Your Name" artifacts/macos-artifacts-*/ssc.app
+
+      # Подпись Android приложений (если есть keystore)
+      - name: Sign Android apps
+        if: env.ANDROID_KEYSTORE != ''
+        run: |
+          # Здесь будет логика подписи Android приложений
+          echo "Signing Android applications..."
+          # Пример: jarsigner -keystore ${{ secrets.ANDROID_KEYSTORE }} -storepass ${{ secrets.ANDROID_KEYSTORE_PASSWORD }} artifacts/android-artifacts-*/app-release.apk alias_name
+
+      - name: Upload signed artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: signed-artifacts-${{ github.sha }}
+          path: artifacts
+          retention-days: 30
