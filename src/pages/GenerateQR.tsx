@@ -8,6 +8,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { QRCodeSVG } from 'qrcode.react';
 import { QRCodeCanvas } from 'qrcode.react';
+import FadeContent from '@/components/FadeContent';
+import Counter from '@/components/Counter';
 
 interface GenerateQRProps {
   onBack: () => void;
@@ -138,11 +140,29 @@ const GenerateQR = ({ onBack, onConnected, autoGenerate, ttl: ttlMinutes = 5 }: 
             {!offer ? (
               <div className="w-full text-center text-slate-400 py-8">Генерация QR-кода...</div>
             ) : (
+              <FadeContent blur={true}>
               <div className="space-y-4">
                 <div className="bg-white p-4 rounded-lg">
                   {/* TTL и прогресс */}
                   <div className="flex justify-between items-center mb-2">
-                    <span className="text-xs text-slate-500">QR-код истечёт через {ttl} сек.</span>
+                    <div className="flex items-center space-x-2">
+                      <span className="text-xs text-slate-500">QR-код истечёт через</span>
+                      <Counter 
+                        value={ttl}
+                        fontSize={12}
+                        padding={0}
+                        places={ttl >= 100 ? [100, 10, 1] : ttl >= 10 ? [10, 1] : [1]}
+                        gap={1}
+                        textColor="#6b7280"
+                        fontWeight="normal"
+                        containerStyle={{ display: 'inline-block' }}
+                        // Отключаем фон и градиенты для компактного счетчика TTL
+                        gradientHeight={0}
+                        topGradientStyle={{ height: 0, background: 'transparent' }}
+                        bottomGradientStyle={{ height: 0, background: 'transparent' }}
+                      />
+                      {/* <span className="text-xs text-slate-500">сек.</span> */}
+                    </div>
                     <div className="w-32 h-2 bg-slate-300 rounded overflow-hidden">
                       <div className="h-2 bg-emerald-500 transition-all" style={{ width: `${(ttl/TTL)*100}%` }} />
                     </div>
@@ -196,6 +216,7 @@ const GenerateQR = ({ onBack, onConnected, autoGenerate, ttl: ttlMinutes = 5 }: 
                   </div>
                 </div>
               </div>
+              </FadeContent>
             )}
           </CardContent>
         </Card>
