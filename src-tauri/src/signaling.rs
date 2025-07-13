@@ -73,3 +73,13 @@ pub async fn disconnect() {
 pub async fn check_ice_server_availability(config: webrtc_peer::ServerConfig) -> bool {
     webrtc_peer::check_ice_server_availability(config).await
 }
+
+#[command]
+pub async fn set_ice_servers(servers: Vec<webrtc_peer::ServerConfig>) -> bool {
+    webrtc_peer::set_ice_servers(servers)
+}
+
+#[command]
+pub async fn get_ice_servers() -> Vec<webrtc_peer::ServerConfig> {
+    webrtc_peer::get_ice_servers()
+}

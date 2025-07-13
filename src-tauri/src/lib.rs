@@ -29,6 +29,8 @@ pub fn run() {
             signaling::is_connected,
             signaling::disconnect,
             signaling::check_ice_server_availability,
+            signaling::set_ice_servers,
+            signaling::get_ice_servers,
             
             greet
         ])

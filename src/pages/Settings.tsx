@@ -13,6 +13,7 @@ import ShinyText from '@/components/text/ShinyText';
 import AnimatedContent from '@/components/AnimatedContent';
 import FadeContent from '@/components/FadeContent';
 import { invoke } from '@tauri-apps/api/core';
+import { useIceServers } from '@/hooks/useIceServers';
 
 interface SettingsProps {
   onBack: () => void;
@@ -45,6 +46,7 @@ const Settings = ({ onBack }: SettingsProps) => {
     ],
     offerTTL: 5
   });
+  const { setIceServers: syncIceServers } = useIceServers();
 
   const [showCredentials, setShowCredentials] = useState<{[key: string]: boolean}>({});
   const [easterEgg, setEasterEgg] = useState(false);
@@ -134,7 +136,7 @@ const Settings = ({ onBack }: SettingsProps) => {
     }
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     // Проверяем, что есть хотя бы один сервер
     if (!settings.servers || settings.servers.length === 0) {
       toast({
@@ -158,12 +160,18 @@ const Settings = ({ onBack }: SettingsProps) => {
 
     // Сохраняем настройки в localStorage
     localStorage.setItem('ssc-settings', JSON.stringify(settings));
-    console.log('Settings saved:', settings);
-    toast({
-      title: "Успешно",
-      description: "Настройки сохранены"
-    });
-    onBack();
+
+    // Синхронизируем с Rust
+    const success = await syncIceServers(settings.servers);
+    
+    if (success) {
+      console.log('Settings saved and synced with Rust:', settings);
+      toast({
+        title: "Успешно",
+        description: "Настройки сохранены и применены"
+      });
+      onBack();
+    }
   };
 
   const handleReset = () => {

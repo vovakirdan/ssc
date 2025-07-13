@@ -70,6 +70,9 @@ static LOCAL_CANDIDATES: Lazy<Mutex<Vec<IceCandidate>>> = Lazy::new(|| Mutex::ne
 /// Флаг активного сбора кандидатов
 static COLLECTING_CANDIDATES: Lazy<Mutex<bool>> = Lazy::new(|| Mutex::new(false));
 
+/// Глобальное хранилище для пользовательских ICE серверов
+static USER_ICE_SERVERS: Lazy<Mutex<Option<Vec<ServerConfig>>>> = Lazy::new(|| Mutex::new(None));
+
 /// ========== CONSTANTS ==========
 
 /// Длина тега аутентификации для ChaCha20-Poly1305
@@ -388,39 +391,39 @@ async fn check_via_ice_gathering(
     }
 }
 
-fn rtc_config() -> RTCConfiguration {
-    RTCConfiguration {
-        ice_servers: vec![
-            // STUN серверы
+/// Получение конфигурации серверов из фронтенда
+pub fn get_user_ice_servers(servers: Vec<ServerConfig>) -> Vec<RTCIceServer> {
+    servers.into_iter().map(|config| {
+        let url = add_ice_url_scheme(&config);
+        
+        RTCIceServer {
+            urls: vec![url],
+            username: config.username.unwrap_or_default(),
+            credential: config.credential.unwrap_or_default(),
+        }
+    }).collect()
+}
+
+/// Создает конфигурацию для peer connection
+fn rtc_config(custom_servers: Option<Vec<ServerConfig>>) -> RTCConfiguration {
+    let ice_servers = if let Some(servers) = custom_servers {
+        // Используем пользовательские серверы
+        get_user_ice_servers(servers)
+    } else {
+        // Используем дефолтные серверы
+        vec![
             RTCIceServer {
                 urls: vec![
                     "stun:stun.l.google.com:19302".into(),
                     "stun:stun1.l.google.com:19302".into(),
-                    "stun:stun2.l.google.com:19302".into(),
-                    "stun:stun3.l.google.com:19302".into(),
                 ],
                 ..Default::default()
             },
-            // TURN серверы с разными портами
-            RTCIceServer {
-                urls: vec![
-                    "turn:global.relay.metered.ca:80".into(),
-                    "turn:global.relay.metered.ca:80?transport=tcp".into(),
-                ],
-                username: "780f40cf85d42703e9fd4d35".into(), // don't worry. Thats temp creds
-                credential: "BmtggDCoW5ZDaonw".into(), // don't worry. Thats temp creds
-                ..Default::default()
-            },
-            RTCIceServer {
-                urls: vec![
-                    "turn:global.relay.metered.ca:443".into(),
-                    "turn:global.relay.metered.ca:443?transport=tcp".into(),
-                ],
-                username: "780f40cf85d42703e9fd4d35".into(), // don't worry. Thats temp creds
-                credential: "BmtggDCoW5ZDaonw".into(), // don't worry. Thats temp creds
-                ..Default::default()
-            },
-        ],
+        ]
+    };
+
+    RTCConfiguration {
+        ice_servers,
         // Добавляем более агрессивные настройки ICE
         ice_candidate_pool_size: 10,
         bundle_policy: RTCBundlePolicy::MaxBundle,
@@ -428,6 +431,51 @@ fn rtc_config() -> RTCConfiguration {
         // ice_transport_policy: webrtc::peer_connection::policy::ice_transport_policy::RTCIceTransportPolicy::Relay,
         ..Default::default()
     }
+}
+
+/// Устанавливает пользовательские ICE серверы, возвращает true при успехе, false при ошибке
+pub fn set_ice_servers(servers: Vec<ServerConfig>) -> bool {
+    log(&format!("Setting {} custom ICE servers", servers.len()));
+    
+    // Валидация серверов
+    for server in &servers {
+        if server.url.is_empty() {
+            log("Server URL cannot be empty");
+            return false;
+        }
+        
+        if server.r#type == "turn" && (server.username.is_none() || server.credential.is_none()) {
+            log("TURN servers require username and credential");
+            return false;
+        }
+    }
+    
+    *USER_ICE_SERVERS.lock().unwrap() = Some(servers);
+    log("Custom ICE servers set successfully");
+    true
+}
+
+/// Получает пользовательские ICE серверы, возвращает дефолтные серверы если не установлены
+pub fn get_ice_servers() -> Vec<ServerConfig> {
+    USER_ICE_SERVERS.lock().unwrap().clone().unwrap_or_else(|| {
+        // Возвращаем дефолтные серверы в формате ServerConfig
+        vec![
+            ServerConfig {
+                id: "default-stun".into(),
+                r#type: "stun".into(),
+                url: "stun:stun.l.google.com:19302".into(),
+                username: None,
+                credential: None,
+            },
+            ServerConfig {
+                id: "default-turn".into(),
+                r#type: "turn".into(),
+                url: "stun:stun1.l.google.com:19302".into(),
+                username: None,
+                credential: None,
+            }
+        ]
+    })
 }
 
 fn random_id() -> String {
@@ -759,7 +807,12 @@ async fn apply_pending_candidates(pc: &RTCPeerConnection) {
 /// создаём Peer; если `initiator`, то сами делаем data-channel
 async fn new_peer(initiator: bool, connection_id: String) -> Arc<RTCPeerConnection> {
     let api = APIBuilder::new().build();
-    let pc = Arc::new(api.new_peer_connection(rtc_config()).await.unwrap());
+    
+    // Получаем пользовательские серверы если они установлены
+    let custom_servers = USER_ICE_SERVERS.lock().unwrap().clone();
+    let config = rtc_config(custom_servers);
+    
+    let pc = Arc::new(api.new_peer_connection(config).await.unwrap());
 
     // Начинаем сбор кандидатов
     *COLLECTING_CANDIDATES.lock().unwrap() = true;
