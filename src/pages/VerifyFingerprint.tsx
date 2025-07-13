@@ -16,11 +16,16 @@ const VerifyFingerprint = ({ onConfirm, onCancel }: VerifyFingerprintProps) => {
   const [checked, setChecked] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  console.log('VerifyFingerprint: Component mounted/rendered');
+
   useEffect(() => {
     const getFingerprint = async () => {
       try {
         setIsLoading(true);
         setError(null);
+        
+        // Даем crypto context время на полную инициализацию
+        await new Promise(resolve => setTimeout(resolve, 500));
         
         // Сначала проверяем соединение
         const connected = await invoke<boolean>("is_connected");
@@ -30,14 +35,31 @@ const VerifyFingerprint = ({ onConfirm, onCancel }: VerifyFingerprintProps) => {
           return;
         }
         
-        // Получаем отпечаток
-        const fp = await invoke<string>("get_fingerprint");
+        // Получаем отпечаток с несколькими попытками
+        let fp: string | null = null;
+        let attempts = 0;
+        const maxAttempts = 5;
         
-        if (fp && fp.trim() !== "") {
-          setFingerprint(fp);
-        } else {
-          setError("Не удалось получить отпечаток");
+        while (attempts < maxAttempts && !fp) {
+          try {
+            fp = await invoke<string>("get_fingerprint");
+            console.log(`VerifyFingerprint: Attempt ${attempts + 1}, fingerprint:`, fp);
+            if (fp && fp.trim() !== "") {
+              console.log('VerifyFingerprint: Successfully got fingerprint:', fp);
+              setFingerprint(fp);
+              return;
+            }
+          } catch (err) {
+            console.warn(`VerifyFingerprint: Attempt ${attempts + 1} failed:`, err);
+          }
+          
+          attempts++;
+          if (attempts < maxAttempts) {
+            await new Promise(resolve => setTimeout(resolve, 200));
+          }
         }
+        
+        setError("Не удалось получить отпечаток");
       } catch (error) {
         console.error("Ошибка получения отпечатка:", error);
         setError("Ошибка получения отпечатка");

@@ -23,7 +23,10 @@ const ScanQR = ({ onBack, onConnected }: ScanQRProps) => {
 
   // Слушаем событие успешного подключения
   useEffect(() => {
-    const un = listen("ssc-connected", () => onConnected());
+    const un = listen("ssc-connected", () => {
+      console.log('ScanQR: received ssc-connected event');
+      onConnected();
+    });
     return () => { un.then(f => f()); };
   }, [onConnected]);
 
@@ -35,7 +38,7 @@ const ScanQR = ({ onBack, onConnected }: ScanQRProps) => {
 
     setLoading(true);
     try {
-      const result = await invoke('accept_offer_and_create_answer', { encoded: offerInput }) as string;
+      const result = await invoke('accept_offer_with_candidates', { encoded: offerInput }) as string;
       setAnswer(result);
       toast.success('Ответ сгенерирован! Отправьте его собеседнику.');
     } catch (error) {

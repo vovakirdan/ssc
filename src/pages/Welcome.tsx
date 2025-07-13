@@ -3,13 +3,15 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Shield, MessageCircle, Users, ArrowRight } from 'lucide-react';
 import DecryptedText from '@/components/text/DecryptedText';
 import TrueFocus from '@/components/text/TrueFocus';
+import { Settings } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 interface WelcomeProps {
   onStart: () => void;
+  onSettings: () => void;
 }
 
-const Welcome = ({ onStart }: WelcomeProps) => {
+const Welcome = ({ onStart, onSettings }: WelcomeProps) => {
   // Состояние для перезапуска анимации
   const [animationKey, setAnimationKey] = useState(0);
 
@@ -87,6 +89,15 @@ const Welcome = ({ onStart }: WelcomeProps) => {
         >
           Начать чат
           <ArrowRight className="w-5 h-5 ml-2" />
+        </Button>
+
+        <Button
+          onClick={onSettings}
+          variant="outline"
+          className="w-full border-slate-600 text-slate-300 bg-slate-600/50"
+        >
+          <Settings className="w-5 h-5 mr-2" />
+          Настройки
         </Button>
 
         <p className="text-center text-slate-500 text-sm">
