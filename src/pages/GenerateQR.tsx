@@ -8,27 +8,34 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { QRCodeSVG } from 'qrcode.react';
 import { QRCodeCanvas } from 'qrcode.react';
+import FadeContent from '@/components/FadeContent';
+import Counter from '@/components/Counter';
+import CircularText from '@/components/CircularText';
 
 interface GenerateQRProps {
   onBack: () => void;
   onConnected: () => void;
   autoGenerate?: boolean;
+  ttl?: number; // TTL в минутах
 }
 
-const GenerateQR = ({ onBack, onConnected, autoGenerate }: GenerateQRProps) => {
+const GenerateQR = ({ onBack, onConnected, autoGenerate, ttl: ttlMinutes = 5 }: GenerateQRProps) => {
   const [offer, setOffer] = useState<string>('');
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
   const [answer, setAnswer] = useState('');
   const [awaitingAnswer, setAwaitingAnswer] = useState(false);
   // TTL для QR-кода (секунды)
-  const TTL = 300;
+  const TTL = ttlMinutes * 60;
   const [ttl, setTtl] = useState(TTL);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Слушаем событие успешного подключения
   useEffect(() => {
-    const un = listen("ssc-connected", () => onConnected());
+    const un = listen("ssc-connected", () => {
+      console.log('GenerateQR: received ssc-connected event');
+      onConnected();
+    });
     return () => { un.then(f => f()); };
   }, [onConnected]);
 
@@ -67,7 +74,7 @@ const GenerateQR = ({ onBack, onConnected, autoGenerate }: GenerateQRProps) => {
   const generateOffer = async () => {
     setLoading(true);
     try {
-      const result = await invoke('generate_offer') as string;
+      const result = await invoke('generate_offer_with_candidates') as string;
       setOffer(result);
       setAwaitingAnswer(true);
       toast.success('QR-код сгенерирован!');
@@ -98,10 +105,10 @@ const GenerateQR = ({ onBack, onConnected, autoGenerate }: GenerateQRProps) => {
 
     setLoading(true);
     try {
-      const success = await invoke('set_answer', { encoded: answer }) as boolean;
+      const success = await invoke('set_answer_with_candidates', { encoded: answer }) as boolean;
       if (success) {
         toast.success('Соединение установлено!');
-        setTimeout(() => onConnected(), 1000);
+        // Не вызываем onConnected() здесь, событие ssc-connected сделает это автоматически
       } else {
         toast.error('Не удалось установить соединение');
       }
@@ -132,13 +139,33 @@ const GenerateQR = ({ onBack, onConnected, autoGenerate }: GenerateQRProps) => {
           </CardHeader>
           <CardContent className="space-y-4">
             {!offer ? (
-              <div className="w-full text-center text-slate-400 py-8">Генерация QR-кода...</div>
+              <div className="w-full text-center text-slate-400 py-8">
+                <CircularText text="Генерация QR-кода..." />
+              </div>
             ) : (
+              <FadeContent blur={true}>
               <div className="space-y-4">
                 <div className="bg-white p-4 rounded-lg">
                   {/* TTL и прогресс */}
                   <div className="flex justify-between items-center mb-2">
-                    <span className="text-xs text-slate-500">QR-код истечёт через {ttl} сек.</span>
+                    <div className="flex items-center space-x-2">
+                      <span className="text-xs text-slate-500">QR-код истечёт через</span>
+                      <Counter 
+                        value={ttl}
+                        fontSize={12}
+                        padding={0}
+                        places={ttl >= 100 ? [100, 10, 1] : ttl >= 10 ? [10, 1] : [1]}
+                        gap={1}
+                        textColor="#6b7280"
+                        fontWeight="normal"
+                        containerStyle={{ display: 'inline-block' }}
+                        // Отключаем фон и градиенты для компактного счетчика TTL
+                        gradientHeight={0}
+                        topGradientStyle={{ height: 0, background: 'transparent' }}
+                        bottomGradientStyle={{ height: 0, background: 'transparent' }}
+                      />
+                      {/* <span className="text-xs text-slate-500">сек.</span> */}
+                    </div>
                     <div className="w-32 h-2 bg-slate-300 rounded overflow-hidden">
                       <div className="h-2 bg-emerald-500 transition-all" style={{ width: `${(ttl/TTL)*100}%` }} />
                     </div>
@@ -192,6 +219,7 @@ const GenerateQR = ({ onBack, onConnected, autoGenerate }: GenerateQRProps) => {
                   </div>
                 </div>
               </div>
+              </FadeContent>
             )}
           </CardContent>
         </Card>

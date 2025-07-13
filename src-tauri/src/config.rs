@@ -22,4 +22,4 @@ pub mod dev {
     // Эти константы не могут быть изменены в продакшене
     pub const VERBOSE_LOGGING: bool = false;
     pub const ENABLE_LOGGING: bool = false;
-} 
+}
