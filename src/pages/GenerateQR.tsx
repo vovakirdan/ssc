@@ -10,6 +10,7 @@ import { QRCodeSVG } from 'qrcode.react';
 import { QRCodeCanvas } from 'qrcode.react';
 import FadeContent from '@/components/FadeContent';
 import Counter from '@/components/Counter';
+import CircularText from '@/components/CircularText';
 
 interface GenerateQRProps {
   onBack: () => void;
@@ -138,7 +139,9 @@ const GenerateQR = ({ onBack, onConnected, autoGenerate, ttl: ttlMinutes = 5 }: 
           </CardHeader>
           <CardContent className="space-y-4">
             {!offer ? (
-              <div className="w-full text-center text-slate-400 py-8">Генерация QR-кода...</div>
+              <div className="w-full text-center text-slate-400 py-8">
+                <CircularText text="Генерация QR-кода..." />
+              </div>
             ) : (
               <FadeContent blur={true}>
               <div className="space-y-4">
