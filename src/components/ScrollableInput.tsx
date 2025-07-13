@@ -17,14 +17,12 @@ interface ScrollableInputProps {
 
 const ScrollableInput: React.FC<ScrollableInputProps> = ({
   value,
-  readOnly = false,
   className = "",
   placeholder = "",
   velocity = 50,
   damping = 50,
   stiffness = 400,
   numCopies = 3,
-  onCopy,
   copyButton,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
