@@ -334,7 +334,6 @@ const Settings = ({ onBack }: SettingsProps) => {
                           Подробная информация о серверах для P2P соединения
                         </DialogDescription>
                       </DialogHeader>
-                      
                       <div className="space-y-4 text-slate-200 leading-relaxed">
                         <div className="space-y-3">
                           <p>
