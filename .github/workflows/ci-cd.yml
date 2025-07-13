@@ -48,9 +48,15 @@ jobs:
           if echo "$CHANGED_FILES" | grep -E "^(package\.json|package-lock\.json|Cargo\.toml|Cargo\.lock|tauri\.conf\.json|vite\.config\.ts|tailwind\.config\.ts|tsconfig\.json)" > /dev/null; then
             CONFIG_CHANGES=true
           fi
+
+          # Проверяем изменения в workflow
+          WORKFLOW_CHANGES=false
+          if echo "$CHANGED_FILES" | grep -E "^(.github/workflows/ci-cd\.yml)" > /dev/null; then
+            WORKFLOW_CHANGES=true
+          fi
           
           # Собираем если есть изменения в коде или конфигурации
-          if [ "$CODE_CHANGES" = true ] || [ "$CONFIG_CHANGES" = true ]; then
+          if [ "$CODE_CHANGES" = true ] || [ "$CONFIG_CHANGES" = true ] || [ "$WORKFLOW_CHANGES" = true ]; then
             echo "should-build=true" >> $GITHUB_OUTPUT
             echo "Code or config changes detected, will build"
           else
@@ -66,6 +72,19 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt update
+          sudo apt install libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
 
       - name: Setup Rust
         uses: actions-rs/toolchain@v1
@@ -106,6 +125,19 @@ jobs:
         with:
           node-version: '18'
           cache: 'npm'
+
+      - name: Install system dependencies
+        run: |
+          sudo apt update
+          sudo apt install libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
 
       - name: Setup Rust
         uses: actions-rs/toolchain@v1
@@ -341,6 +373,19 @@ jobs:
         with:
           node-version: '18'
           cache: 'npm'
+
+      - name: Install system dependencies
+        run: |
+          sudo apt update
+          sudo apt install libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
 
       - name: Setup Rust
         uses: actions-rs/toolchain@v1
