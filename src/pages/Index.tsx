@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Welcome from './Welcome';
 import GenerateQR from './GenerateQR';
 import ScanQR from './ScanQR';
@@ -12,6 +12,22 @@ type AppMode = 'welcome' | 'generate' | 'scan' | 'verify' | 'chat' | 'settings';
 const Index = () => {
   const [mode, setMode] = useState<AppMode>('welcome');
   const [showOptions, setShowOptions] = useState(false);
+  const [ttl, setTtl] = useState(5); // TTL по умолчанию 5 минут
+
+  // Загружаем TTL из настроек при монтировании
+  useEffect(() => {
+    const savedSettings = localStorage.getItem('ssc-settings');
+    if (savedSettings) {
+      try {
+        const parsedSettings = JSON.parse(savedSettings);
+        if (typeof parsedSettings.offerTTL === 'number') {
+          setTtl(parsedSettings.offerTTL);
+        }
+      } catch (error) {
+        console.error('Error parsing saved settings:', error);
+      }
+    }
+  }, []);
 
   const handleStart = () => {
     setShowOptions(true);
@@ -24,10 +40,33 @@ const Index = () => {
     } else {
       setMode('welcome');
     }
+    // Обновляем TTL при возврате (на случай если пользователь изменил настройки)
+    loadTTL();
   };
 
   const handleSettings = () => {
     setMode('settings');
+  };
+
+  // Функция для загрузки TTL из настроек
+  const loadTTL = () => {
+    const savedSettings = localStorage.getItem('ssc-settings');
+    if (savedSettings) {
+      try {
+        const parsedSettings = JSON.parse(savedSettings);
+        if (typeof parsedSettings.offerTTL === 'number') {
+          setTtl(parsedSettings.offerTTL);
+        }
+      } catch (error) {
+        console.error('Error parsing saved settings:', error);
+      }
+    }
+  };
+
+  // Обновляем TTL при переходе в режим generate
+  const handleGenerate = () => {
+    loadTTL(); // Загружаем актуальный TTL
+    setMode('generate');
   };
 
   const handleConnected = () => {
@@ -51,7 +90,7 @@ const Index = () => {
   }
 
   if (mode === 'generate') {
-    return <GenerateQR onBack={handleBack} onConnected={handleConnected} autoGenerate={true} />;
+    return <GenerateQR onBack={handleBack} onConnected={handleConnected} autoGenerate={true} ttl={ttl} />;
   }
 
   if (mode === 'scan') {
@@ -76,7 +115,7 @@ const Index = () => {
 
           <div className="space-y-4">
             <button
-              onClick={() => setMode('generate')}
+              onClick={handleGenerate}
               className="w-full p-6 bg-slate-800/50 hover:bg-slate-700/50 border border-slate-700 rounded-lg transition-all text-left"
             >
               <h3 className="text-white font-semibold mb-2">Создать QR-код</h3>

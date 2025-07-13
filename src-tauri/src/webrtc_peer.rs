@@ -19,7 +19,7 @@ use tokio::time::sleep;
 use webrtc::{
     api::APIBuilder,
     data_channel::{data_channel_init::RTCDataChannelInit, RTCDataChannel},
-    ice_transport::ice_server::RTCIceServer,
+    ice_transport::{ice_server::RTCIceServer, ice_gatherer_state::RTCIceGathererState},
     peer_connection::{
         configuration::RTCConfiguration, peer_connection_state::RTCPeerConnectionState,
         sdp::session_description::RTCSessionDescription, RTCPeerConnection,
@@ -30,6 +30,8 @@ use webrtc::ice_transport::ice_candidate::RTCIceCandidate;
 use webrtc::peer_connection::policy::bundle_policy::RTCBundlePolicy;
 use webrtc::peer_connection::policy::rtcp_mux_policy::RTCRtcpMuxPolicy;
 use webrtc::ice_transport::ice_candidate::RTCIceCandidateInit;
+use tokio::time::timeout;
+use tokio::sync::mpsc;
 
 /// ========== GLOBAL STATE ==========
 
@@ -68,6 +70,9 @@ static LOCAL_CANDIDATES: Lazy<Mutex<Vec<IceCandidate>>> = Lazy::new(|| Mutex::ne
 /// Флаг активного сбора кандидатов
 static COLLECTING_CANDIDATES: Lazy<Mutex<bool>> = Lazy::new(|| Mutex::new(false));
 
+/// Глобальное хранилище для пользовательских ICE серверов
+static USER_ICE_SERVERS: Lazy<Mutex<Option<Vec<ServerConfig>>>> = Lazy::new(|| Mutex::new(None));
+
 /// ========== CONSTANTS ==========
 
 /// Длина тега аутентификации для ChaCha20-Poly1305
@@ -100,6 +105,16 @@ pub struct IceCandidate {
 pub struct ConnectionBundle {
     pub sdp_payload: SdpPayload,
     pub ice_candidates: Vec<IceCandidate>,
+}
+
+/// Конфигурация ICE сервера
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ServerConfig {
+    pub id: String,
+    pub r#type: String, // 'stun' or 'turn'
+    pub url: String,
+    pub username: Option<String>,
+    pub credential: Option<String>,
 }
 
 /// Безопасная обёртка для ключа с автоматической очисткой памяти
@@ -186,39 +201,229 @@ async fn dump_selected_pair(pc: &RTCPeerConnection, moment: &str) {
     }
 }
 
-fn rtc_config() -> RTCConfiguration {
-    RTCConfiguration {
-        ice_servers: vec![
-            // STUN серверы
+// Функция для добавления схемы протокола к URL ICE сервера, если она отсутствует
+fn add_ice_url_scheme(config: &ServerConfig) -> String {
+    // Если url уже начинается с "turn:" или "stun:", возвращаем как есть
+    if config.url.starts_with("turn:") || config.url.starts_with("stun:") {
+        config.url.clone()
+    } else {
+        // В зависимости от типа сервера добавляем нужную схему
+        let scheme = if config.r#type == "turn" { "turn:" } else { "stun:" };
+        format!("{}{}", scheme, config.url)
+    }
+}
+
+pub async fn check_ice_server_availability(config: ServerConfig) -> bool {
+    log(&format!("check_ice_server_availability called with config: {:?}", config));
+
+    let url = add_ice_url_scheme(&config);
+    
+    log(&format!("Processed URL: '{}' -> '{}'", config.url, url));
+    
+    // Создаем ICE сервер из конфигурации
+    let ice_server = RTCIceServer {
+        urls: vec![url],
+        username: config.username.clone().unwrap_or_default(),
+        credential: config.credential.clone().unwrap_or_default(),
+    };
+    
+    log(&format!("Created ICE server: urls={:?}, username='{}', credential='{}'", 
+                ice_server.urls, ice_server.username, ice_server.credential));
+
+    // Создаем конфигурацию для peer connection
+    let rtc_config = RTCConfiguration {
+        ice_servers: vec![ice_server],
+        ..Default::default()
+    };
+    
+    log(&format!("Created RTC config with {} ICE servers", rtc_config.ice_servers.len()));
+
+    // Создаем API и peer connection
+    let api = APIBuilder::new().build();
+    log("APIBuilder created successfully");
+    
+    match api.new_peer_connection(rtc_config).await {
+        Ok(peer_connection) => {
+            log("Peer connection created successfully, starting ICE gathering check");
+            // Проверяем доступность через gathering состояние
+            check_via_ice_gathering(peer_connection.into(), &config.r#type).await
+        }
+        Err(e) => {
+            log(&format!("Failed to create peer connection: {:?}", e));
+            false
+        }
+    }
+}
+
+async fn check_via_ice_gathering(
+    peer_connection: Arc<RTCPeerConnection>,
+    server_type: &str,
+) -> bool {
+    log(&format!("check_via_ice_gathering called with server_type: {}", server_type));
+    
+    let (tx, mut rx) = mpsc::channel(10);
+    let tx_clone = tx.clone();
+    
+    // Подписываемся на изменения состояния gathering
+    peer_connection.on_ice_gathering_state_change(Box::new(move |state| {
+        let tx = tx_clone.clone();
+        log(&format!("ICE gathering state changed to: {:?}", state));
+        tokio::spawn(async move {
+            let _ = tx.send(state).await;
+        });
+        Box::pin(async {})
+    }));
+
+    // Подписываемся на ICE кандидатов
+    let (candidate_tx, mut candidate_rx) = mpsc::channel(10);
+    let server_type_clone = server_type.to_string();
+    
+    peer_connection.on_ice_candidate(Box::new(move |candidate| {
+        let tx = candidate_tx.clone();
+        let server_type = server_type_clone.clone();
+        
+        Box::pin(async move {
+            if let Some(c) = candidate {
+                log(&format!("Received ICE candidate: {:?}", c));
+                // Проверяем тип кандидата
+                let candidate_type = c.to_json().map(|json| {
+                    log(&format!("Candidate JSON: candidate='{}'", json.candidate));
+                    // Для STUN серверов ищем srflx кандидатов
+                    // Для TURN серверов ищем relay кандидатов
+                    if server_type == "stun" && json.candidate.contains("srflx") {
+                        log("Found srflx candidate for STUN server");
+                        true
+                    } else if server_type == "turn" && json.candidate.contains("relay") {
+                        log("Found relay candidate for TURN server");
+                        true
+                    } else {
+                        log(&format!("Candidate type mismatch: expected {} but got candidate: {}", server_type, json.candidate));
+                        false
+                    }
+                }).unwrap_or_else(|e| {
+                    log(&format!("Failed to get candidate JSON: {:?}", e));
+                    false
+                });
+                
+                if candidate_type {
+                    log("Sending success signal for candidate match");
+                    let _ = tx.send(true).await;
+                }
+            } else {
+                log("Received null candidate (gathering complete)");
+            }
+        })
+    }));
+
+    // Создаем data channel для инициации ICE gathering
+    log("Creating data channel to initiate ICE gathering");
+    match peer_connection.create_data_channel("test", None).await {
+        Ok(_) => {
+            log("Data channel created successfully");
+        },
+        Err(e) => {
+            log(&format!("Failed to create data channel: {:?}", e));
+            return false;
+        }
+    }
+
+    // Создаем offer для запуска ICE gathering
+    log("Creating offer to start ICE gathering");
+    match peer_connection.create_offer(None).await {
+        Ok(offer) => {
+            log("Offer created successfully, setting local description");
+            if let Err(e) = peer_connection.set_local_description(offer).await {
+                log(&format!("Failed to set local description: {:?}", e));
+                return false;
+            }
+            log("Local description set successfully");
+        }
+        Err(e) => {
+            log(&format!("Failed to create offer: {:?}", e));
+            return false;
+        }
+    }
+
+    // Ждем результат с таймаутом
+    let check_timeout = Duration::from_secs(10);
+    log(&format!("Starting timeout wait of {} seconds", check_timeout.as_secs()));
+    
+    tokio::select! {
+        // Ждем подходящего кандидата
+        result = timeout(check_timeout, candidate_rx.recv()) => {
+            match result {
+                Ok(Some(true)) => {
+                    log("Received success signal from candidate match");
+                    let _ = peer_connection.close().await;
+                    true
+                },
+                Ok(Some(false)) => {
+                    log("Received false signal from candidate match");
+                    let _ = peer_connection.close().await;
+                    false
+                },
+                Ok(None) => {
+                    log("Candidate channel closed without success signal");
+                    let _ = peer_connection.close().await;
+                    false
+                },
+                Err(_) => {
+                    log("Timeout waiting for candidate match");
+                    let _ = peer_connection.close().await;
+                    false
+                }
+            }
+        }
+        // Или ждем failed состояния
+        _ = async {
+            while let Some(state) = rx.recv().await {
+                log(&format!("Received gathering state: {:?}", state));
+                if state == RTCIceGathererState::Complete {
+                    log("ICE gathering completed");
+                    break;
+                }
+            }
+        } => {
+            log("Gathering state monitoring completed");
+            let _ = peer_connection.close().await;
+            false
+        }
+    }
+}
+
+/// Получение конфигурации серверов из фронтенда
+pub fn get_user_ice_servers(servers: Vec<ServerConfig>) -> Vec<RTCIceServer> {
+    servers.into_iter().map(|config| {
+        let url = add_ice_url_scheme(&config);
+        
+        RTCIceServer {
+            urls: vec![url],
+            username: config.username.unwrap_or_default(),
+            credential: config.credential.unwrap_or_default(),
+        }
+    }).collect()
+}
+
+/// Создает конфигурацию для peer connection
+fn rtc_config(custom_servers: Option<Vec<ServerConfig>>) -> RTCConfiguration {
+    let ice_servers = if let Some(servers) = custom_servers {
+        // Используем пользовательские серверы
+        get_user_ice_servers(servers)
+    } else {
+        // Используем дефолтные серверы
+        vec![
             RTCIceServer {
                 urls: vec![
                     "stun:stun.l.google.com:19302".into(),
                     "stun:stun1.l.google.com:19302".into(),
-                    "stun:stun2.l.google.com:19302".into(),
-                    "stun:stun3.l.google.com:19302".into(),
                 ],
                 ..Default::default()
             },
-            // TURN серверы с разными портами
-            RTCIceServer {
-                urls: vec![
-                    "turn:global.relay.metered.ca:80".into(),
-                    "turn:global.relay.metered.ca:80?transport=tcp".into(),
-                ],
-                username: "780f40cf85d42703e9fd4d35".into(), // don't worry. Thats temp creds
-                credential: "BmtggDCoW5ZDaonw".into(), // don't worry. Thats temp creds
-                ..Default::default()
-            },
-            RTCIceServer {
-                urls: vec![
-                    "turn:global.relay.metered.ca:443".into(),
-                    "turn:global.relay.metered.ca:443?transport=tcp".into(),
-                ],
-                username: "780f40cf85d42703e9fd4d35".into(), // don't worry. Thats temp creds
-                credential: "BmtggDCoW5ZDaonw".into(), // don't worry. Thats temp creds
-                ..Default::default()
-            },
-        ],
+        ]
+    };
+
+    RTCConfiguration {
+        ice_servers,
         // Добавляем более агрессивные настройки ICE
         ice_candidate_pool_size: 10,
         bundle_policy: RTCBundlePolicy::MaxBundle,
@@ -226,6 +431,51 @@ fn rtc_config() -> RTCConfiguration {
         // ice_transport_policy: webrtc::peer_connection::policy::ice_transport_policy::RTCIceTransportPolicy::Relay,
         ..Default::default()
     }
+}
+
+/// Устанавливает пользовательские ICE серверы, возвращает true при успехе, false при ошибке
+pub fn set_ice_servers(servers: Vec<ServerConfig>) -> bool {
+    log(&format!("Setting {} custom ICE servers", servers.len()));
+    
+    // Валидация серверов
+    for server in &servers {
+        if server.url.is_empty() {
+            log("Server URL cannot be empty");
+            return false;
+        }
+        
+        if server.r#type == "turn" && (server.username.is_none() || server.credential.is_none()) {
+            log("TURN servers require username and credential");
+            return false;
+        }
+    }
+    
+    *USER_ICE_SERVERS.lock().unwrap() = Some(servers);
+    log("Custom ICE servers set successfully");
+    true
+}
+
+/// Получает пользовательские ICE серверы, возвращает дефолтные серверы если не установлены
+pub fn get_ice_servers() -> Vec<ServerConfig> {
+    USER_ICE_SERVERS.lock().unwrap().clone().unwrap_or_else(|| {
+        // Возвращаем дефолтные серверы в формате ServerConfig
+        vec![
+            ServerConfig {
+                id: "default-stun".into(),
+                r#type: "stun".into(),
+                url: "stun:stun.l.google.com:19302".into(),
+                username: None,
+                credential: None,
+            },
+            ServerConfig {
+                id: "default-turn".into(),
+                r#type: "turn".into(),
+                url: "stun:stun1.l.google.com:19302".into(),
+                username: None,
+                credential: None,
+            }
+        ]
+    })
 }
 
 fn random_id() -> String {
@@ -557,7 +807,12 @@ async fn apply_pending_candidates(pc: &RTCPeerConnection) {
 /// создаём Peer; если `initiator`, то сами делаем data-channel
 async fn new_peer(initiator: bool, connection_id: String) -> Arc<RTCPeerConnection> {
     let api = APIBuilder::new().build();
-    let pc = Arc::new(api.new_peer_connection(rtc_config()).await.unwrap());
+    
+    // Получаем пользовательские серверы если они установлены
+    let custom_servers = USER_ICE_SERVERS.lock().unwrap().clone();
+    let config = rtc_config(custom_servers);
+    
+    let pc = Arc::new(api.new_peer_connection(config).await.unwrap());
 
     // Начинаем сбор кандидатов
     *COLLECTING_CANDIDATES.lock().unwrap() = true;

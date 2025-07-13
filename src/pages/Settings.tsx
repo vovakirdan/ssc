@@ -12,6 +12,8 @@ import StarBorder from '@/components/StarBorder';
 import ShinyText from '@/components/text/ShinyText';
 import AnimatedContent from '@/components/AnimatedContent';
 import FadeContent from '@/components/FadeContent';
+import { invoke } from '@tauri-apps/api/core';
+import { useIceServers } from '@/hooks/useIceServers';
 
 interface SettingsProps {
   onBack: () => void;
@@ -44,6 +46,7 @@ const Settings = ({ onBack }: SettingsProps) => {
     ],
     offerTTL: 5
   });
+  const { setIceServers: syncIceServers } = useIceServers();
 
   const [showCredentials, setShowCredentials] = useState<{[key: string]: boolean}>({});
   const [easterEgg, setEasterEgg] = useState(false);
@@ -81,32 +84,28 @@ const Settings = ({ onBack }: SettingsProps) => {
     updateServer(server.id, { status: 'validating' });
 
     try {
-      // Имитируем проверку доступности сервера
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      
-      // Простая валидация URL
-      const isValidUrl = server.url && (
-        server.url.startsWith('stun:') || 
-        server.url.startsWith('turn:') || 
-        server.url.startsWith('turns:')
-      );
-
-      if (!isValidUrl) {
-        throw new Error('Invalid URL format');
-      }
-
       // Для TURN серверов проверяем наличие учетных данных
       if (server.type === 'turn' && (!server.username || !server.credential)) {
         throw new Error('TURN server requires username and credential');
       }
+      console.log(server);
 
-      // Моковая проверка доступности (в реальности здесь будет проверка подключения)
-      const isAccessible = Math.random() > 0.3; // 70% шанс успеха для демо
-      
-      if (!isAccessible) {
+      // Проверяем доступность сервера
+      const isAvailable = await invoke('check_ice_server_availability', {
+        config: {
+          id: server.id,
+          type: server.type,
+          url: server.url,
+          username: server.username,
+          credential: server.credential
+        }
+      });
+
+      if (!isAvailable) {
+        console.log('Server is not accessible');
         throw new Error('Server is not accessible');
       }
-
+      
       updateServer(server.id, { status: 'valid' });
       
       toast({
@@ -137,7 +136,7 @@ const Settings = ({ onBack }: SettingsProps) => {
     }
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     // Проверяем, что есть хотя бы один сервер
     if (!settings.servers || settings.servers.length === 0) {
       toast({
@@ -161,12 +160,18 @@ const Settings = ({ onBack }: SettingsProps) => {
 
     // Сохраняем настройки в localStorage
     localStorage.setItem('ssc-settings', JSON.stringify(settings));
-    console.log('Settings saved:', settings);
-    toast({
-      title: "Успешно",
-      description: "Настройки сохранены"
-    });
-    onBack();
+
+    // Синхронизируем с Rust
+    const success = await syncIceServers(settings.servers);
+    
+    if (success) {
+      console.log('Settings saved and synced with Rust:', settings);
+      toast({
+        title: "Успешно",
+        description: "Настройки сохранены и применены"
+      });
+      onBack();
+    }
   };
 
   const handleReset = () => {
@@ -446,6 +451,22 @@ const Settings = ({ onBack }: SettingsProps) => {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
+              {/* Предупреждение если нет TURN серверов */}
+              {(!settings.servers || settings.servers.filter(s => s.type === 'turn').length === 0) && (
+                <div className="p-4 bg-orange-900/30 border border-orange-500/50 rounded-lg">
+                  <div className="flex items-start space-x-3">
+                    <div className="w-2 h-2 bg-orange-500 rounded-full mt-2 flex-shrink-0"></div>
+                    <div>
+                      <p className="text-orange-300 font-medium mb-1">Внимание!</p>
+                      <p className="text-orange-200 text-sm">
+                        Не добавлено ни одного TURN сервера. Связь из под разных сетей не гарантирована. 
+                        Настоятельно рекомендуется добавить хотя бы один TURN сервер.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+              
               {(settings.servers || []).map((server) => (
                 <AnimatedContent
                 ease="bounce.out"

@@ -13,16 +13,17 @@ interface GenerateQRProps {
   onBack: () => void;
   onConnected: () => void;
   autoGenerate?: boolean;
+  ttl?: number; // TTL в минутах
 }
 
-const GenerateQR = ({ onBack, onConnected, autoGenerate }: GenerateQRProps) => {
+const GenerateQR = ({ onBack, onConnected, autoGenerate, ttl: ttlMinutes = 5 }: GenerateQRProps) => {
   const [offer, setOffer] = useState<string>('');
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
   const [answer, setAnswer] = useState('');
   const [awaitingAnswer, setAwaitingAnswer] = useState(false);
   // TTL для QR-кода (секунды)
-  const TTL = 300;
+  const TTL = ttlMinutes * 60;
   const [ttl, setTtl] = useState(TTL);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
 
