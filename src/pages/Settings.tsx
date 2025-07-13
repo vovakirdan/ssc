@@ -12,6 +12,7 @@ import StarBorder from '@/components/StarBorder';
 import ShinyText from '@/components/text/ShinyText';
 import AnimatedContent from '@/components/AnimatedContent';
 import FadeContent from '@/components/FadeContent';
+import { invoke } from '@tauri-apps/api/core';
 
 interface SettingsProps {
   onBack: () => void;
@@ -81,32 +82,28 @@ const Settings = ({ onBack }: SettingsProps) => {
     updateServer(server.id, { status: 'validating' });
 
     try {
-      // Имитируем проверку доступности сервера
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      
-      // Простая валидация URL
-      const isValidUrl = server.url && (
-        server.url.startsWith('stun:') || 
-        server.url.startsWith('turn:') || 
-        server.url.startsWith('turns:')
-      );
-
-      if (!isValidUrl) {
-        throw new Error('Invalid URL format');
-      }
-
       // Для TURN серверов проверяем наличие учетных данных
       if (server.type === 'turn' && (!server.username || !server.credential)) {
         throw new Error('TURN server requires username and credential');
       }
+      console.log(server);
 
-      // Моковая проверка доступности (в реальности здесь будет проверка подключения)
-      const isAccessible = Math.random() > 0.3; // 70% шанс успеха для демо
-      
-      if (!isAccessible) {
+      // Проверяем доступность сервера
+      const isAvailable = await invoke('check_ice_server_availability', {
+        config: {
+          id: server.id,
+          type: server.type,
+          url: server.url,
+          username: server.username,
+          credential: server.credential
+        }
+      });
+
+      if (!isAvailable) {
+        console.log('Server is not accessible');
         throw new Error('Server is not accessible');
       }
-
+      
       updateServer(server.id, { status: 'valid' });
       
       toast({

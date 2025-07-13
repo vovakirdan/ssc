@@ -68,3 +68,8 @@ pub fn is_connected() -> bool {
 pub async fn disconnect() {
     webrtc_peer::disconnect().await
 }
+
+#[command]
+pub async fn check_ice_server_availability(config: webrtc_peer::ServerConfig) -> bool {
+    webrtc_peer::check_ice_server_availability(config).await
+}
