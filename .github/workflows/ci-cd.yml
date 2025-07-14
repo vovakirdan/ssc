@@ -361,6 +361,7 @@ jobs:
 
   # Сборка для Android
   build-android:
+    name: 🔧 Build Android APK & AAB
     runs-on: ubuntu-latest
     needs: [check-changes, cargo-check]
     if: needs.check-changes.outputs.should-build == 'true' && github.event_name != 'pull_request'
@@ -368,79 +369,44 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Setup Java (for Gradle)
+        uses: actions/setup-java@v3
         with:
-          node-version: '18'
-          cache: 'npm'
+          distribution: temurin
+          java-version: '17'                              # поддерживаемая версия
+          cache: gradle
 
-      - name: Install system dependencies
+      - name: Setup Android SDK tools
+        uses: android-actions/setup-android@v3             # устанавливает sdkmanager и platform-tools :contentReference[oaicite:8]{index=8}
+
+      - name: Install Android SDK Platforms & NDK
         run: |
-          sudo apt update
-          sudo apt install libwebkit2gtk-4.1-dev \
-            build-essential \
-            curl \
-            wget \
-            file \
-            libxdo-dev \
-            libssl-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev
+          yes | sdkmanager --install "platform-tools" "platforms;android-33" "build-tools;33.0.0" "ndk;25.2.9519653"
+        env:
+          ANDROID_SDK_ROOT: ${{ env.ANDROID_SDK_ROOT }}
 
-      - name: Setup Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
-
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Cache Rust dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
-
-      - name: Cache npm dependencies
-        uses: actions/cache@v4
-        with:
-          path: ~/.npm
-          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-node-
-
-      - name: Cache Android build
-        uses: actions/cache@v4
-        with:
-          path: |
-            src-tauri/gen/android
-            dist
-          key: ${{ runner.os }}-android-build-${{ hashFiles('**/Cargo.lock', '**/package-lock.json', 'src-tauri/tauri.conf.json') }}
-          restore-keys: |
-            ${{ runner.os }}-android-build-
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build frontend
-        run: npm run build
+      - name: Install dependencies & build web assets
+        run: |
+          npm ci
+          npm run build
 
       - name: Install Tauri CLI
         run: npm install -g @tauri-apps/cli@latest
 
-      - name: Build Android app
+      - name: Initialize Android target
         run: |
           cd src-tauri
-          tauri android build
+          tauri android init --ci                  # готовит Gradle конфиг :contentReference[oaicite:9]{index=9}
+        env:
+          ANDROID_SDK_ROOT: ${{ env.ANDROID_SDK_ROOT }}
+
+      - name: Build release APK & AAB
+        run: |
+          cd src-tauri
+          tauri android build --release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ANDROID_HOME: ${{ env.ANDROID_SDK_ROOT }}
+          ANDROID_SDK_ROOT: ${{ env.ANDROID_SDK_ROOT }}
 
       - name: Upload Android artifacts
         uses: actions/upload-artifact@v4

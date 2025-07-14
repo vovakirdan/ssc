@@ -2,51 +2,99 @@ name: Sign Applications
 
 on:
   workflow_run:
-    workflows: ["Simple Build and Release"]
-    types:
-      - completed
+    workflows: ['Simple Build and Release']
+    types: [completed]
     branches: [main]
 
+################################################################################
+# Windows (signtool)                                                            #
+################################################################################
 jobs:
-  sign-apps:
-    runs-on: ubuntu-latest
+  sign-windows:
+    # запускаем только когда основной workflow прошёл успешно
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: windows-latest                # signtool.exe есть только тут
+    env:                                   # secrets → env (безопасно и можно читать в if шагах)
+      CERT_B64:   ${{ secrets.WINDOWS_CERTIFICATE }}
+      CERT_PASS:  ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+      CERT_SHA1:  ${{ secrets.WINDOWS_CERT_SHA1 }}
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { path: artifacts }
 
-      - name: Download artifacts
-        uses: actions/download-artifact@v4
+      - name: Code-sign EXE/MSI
+        if: env.CERT_B64 != ''             # подпись только при наличии сертификата
+        uses: skymatic/code-sign-action@v3.0.1
         with:
-          path: artifacts
+          certificate:      ${{ env.CERT_B64 }}
+          password:         ${{ env.CERT_PASS }}
+          certificatesha1:  ${{ env.CERT_SHA1 }}
+          folder:           artifacts/windows-artifacts-*
+          recursive:        true
 
-      # Подпись Windows приложений (если есть сертификат)
-      - name: Sign Windows apps
-        if: env.WINDOWS_CERTIFICATE != ''
-        run: |
-          # Здесь будет логика подписи Windows приложений
-          echo "Signing Windows applications..."
-          # Пример: signtool sign /f ${{ secrets.WINDOWS_CERTIFICATE }} /p ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }} artifacts/windows-artifacts-*/ssc-setup.exe
-
-      # Подпись macOS приложений (если есть сертификат)
-      - name: Sign macOS apps
-        if: env.MACOS_CERTIFICATE != ''
-        run: |
-          # Здесь будет логика подписи macOS приложений
-          echo "Signing macOS applications..."
-          # Пример: codesign --force --sign "Developer ID Application: Your Name" artifacts/macos-artifacts-*/ssc.app
-
-      # Подпись Android приложений (если есть keystore)
-      - name: Sign Android apps
-        if: env.ANDROID_KEYSTORE != ''
-        run: |
-          # Здесь будет логика подписи Android приложений
-          echo "Signing Android applications..."
-          # Пример: jarsigner -keystore ${{ secrets.ANDROID_KEYSTORE }} -storepass ${{ secrets.ANDROID_KEYSTORE_PASSWORD }} artifacts/android-artifacts-*/app-release.apk alias_name
-
-      - name: Upload signed artifacts
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: signed-artifacts-${{ github.sha }}
-          path: artifacts
-          retention-days: 30
+          name: signed-windows-${{ github.sha }}
+          path: artifacts/windows-artifacts-*
+
+################################################################################
+# macOS (codesign)                                                              #
+################################################################################
+  sign-macos:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: macos-latest                  # codesign доступен только на macOS
+    env:
+      APPLE_CERT_B64:  ${{ secrets.APPLE_CERT_DATA }}
+      APPLE_CERT_PWD:  ${{ secrets.APPLE_CERT_PASSWORD }}
+      APPLE_CERT_ID:   ${{ secrets.APPLE_CERT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { path: artifacts }
+
+      - name: Code-sign & (optionally) notarize
+        if: env.APPLE_CERT_B64 != ''
+        uses: lando/code-sign-action@v3.0.0           # marketplace action
+        with:
+          file:                 artifacts/macos-artifacts-*
+          certificate-data:     ${{ env.APPLE_CERT_B64 }}
+          certificate-password: ${{ env.APPLE_CERT_PWD }}
+          certificate-id:       ${{ env.APPLE_CERT_ID }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: signed-macos-${{ github.sha }}
+          path: artifacts/macos-artifacts-*
+
+################################################################################
+# Android (jarsigner + zipalign)                                                #
+################################################################################
+  sign-android:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    env:
+      KEYSTORE_B64:  ${{ secrets.ANDROID_KEYSTORE }}
+      KS_PASS:       ${{ secrets.KEYSTORE_PASSWORD }}
+      ALIAS:         ${{ secrets.KEY_ALIAS }}
+      ALIAS_PASS:    ${{ secrets.KEY_ALIAS_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { path: artifacts }
+
+      - name: Zipalign & sign APK/AAB
+        if: env.KEYSTORE_B64 != ''
+        uses: kevin-david/zipalign-sign-android-release@v2.0.1   # тэг v2.0.1 существует:contentReference[oaicite:2]{index=2}
+        with:
+          releaseDirectory: artifacts/android-artifacts-*
+          signingKeyBase64: ${{ env.KEYSTORE_B64 }}
+          alias:            ${{ env.ALIAS }}
+          keyStorePassword: ${{ env.KS_PASS }}
+          keyPassword:      ${{ env.ALIAS_PASS }}
+          zipAlign:         true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: signed-android-${{ github.sha }}
+          path: artifacts/android-artifacts-*
