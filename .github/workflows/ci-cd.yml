@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [main, dev]
 
+permissions:
+  contents: write
+
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
@@ -385,6 +388,9 @@ jobs:
           yes | sdkmanager --install "platform-tools" "platforms;android-33" "build-tools;33.0.0" "ndk;25.2.9519653"
         env:
           ANDROID_SDK_ROOT: ${{ env.ANDROID_SDK_ROOT }}
+
+      - name: Set up NDK_HOME
+        run: echo "NDK_HOME=$ANDROID_SDK_ROOT/ndk/25.2.9519653" >> $GITHUB_ENV
 
       - name: Install dependencies & build web assets
         run: |
