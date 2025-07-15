@@ -1,8 +1,8 @@
 # PRIVACY POLICY
 
-**Effective Date:** [DATE]
+**Effective Date:** 15.07.2025
 
-**Last Updated:** [DATE]
+**Last Updated:** 15.07.2025
 
 ## 1. GENERAL PROVISIONS
 
@@ -211,8 +211,8 @@ The Application is provided "as is" without any warranties.
 ### 11.1. Privacy Questions
 
 For all privacy-related questions, contact us at:
-- Email: [EMAIL]
-- GitHub: [GITHUB_REPO]
+- Email: valdimir.developer@bk.ru
+- GitHub: github.com/vovakirdan/ssc
 
 ### 11.2. Complaints
 
@@ -224,7 +224,7 @@ If you believe your privacy rights have been violated, you may:
 
 ### 12.1. Governing Law
 
-This Policy is governed by the laws of [COUNTRY].
+This Policy is governed by the laws of Russian Federation.
 
 ### 12.2. Legislative Changes
 
