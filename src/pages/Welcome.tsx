@@ -1,12 +1,29 @@
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Shield, MessageCircle, Users, ArrowRight } from 'lucide-react';
+import DecryptedText from '@/components/text/DecryptedText';
+import TrueFocus from '@/components/text/TrueFocus';
+import { Settings } from 'lucide-react';
+import { useEffect, useState } from 'react';
 
 interface WelcomeProps {
   onStart: () => void;
+  onSettings: () => void;
 }
 
-const Welcome = ({ onStart }: WelcomeProps) => {
+const Welcome = ({ onStart, onSettings }: WelcomeProps) => {
+  // Состояние для перезапуска анимации
+  const [animationKey, setAnimationKey] = useState(0);
+
+  // Эффект для зацикливания анимации каждые 3 секунды
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setAnimationKey(prev => prev + 1);
+    }, 5000);
+
+    return () => clearInterval(interval);
+  }, []);
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex items-center justify-center p-4">
       <div className="max-w-md w-full space-y-6">
@@ -14,7 +31,17 @@ const Welcome = ({ onStart }: WelcomeProps) => {
           <div className="mx-auto w-20 h-20 bg-gradient-to-r from-emerald-500 to-cyan-500 rounded-full flex items-center justify-center">
             <Shield className="w-10 h-10 text-white" />
           </div>
-          <h1 className="text-3xl font-bold text-white">SecureChat</h1>
+          <h1 className="text-3xl font-bold text-white">
+            <TrueFocus
+              sentence="Secure Chat"
+              manualMode={false}
+              blurAmount={5}
+              borderColor="green"
+              glowColor="rgba(0, 255, 0, 0.6)"
+              animationDuration={0.8}
+              pauseBetweenAnimations={2}
+            />
+          </h1>
           <p className="text-slate-300 text-lg">
             Супер секретный чат с end-to-end шифрованием
           </p>
@@ -25,8 +52,22 @@ const Welcome = ({ onStart }: WelcomeProps) => {
             <CardContent className="p-4 flex items-center space-x-3">
               <MessageCircle className="w-8 h-8 text-emerald-500" />
               <div>
-                <h3 className="text-white font-semibold">Приватные сообщения</h3>
-                <p className="text-slate-400 text-sm">Никто не может прочитать ваши сообщения</p>
+                <h3 className="text-white font-semibold">
+                  <DecryptedText
+                    key={animationKey} // Ключ для принудительного пересоздания компонента
+                    text="Приватные сообщения"
+                    speed={100}
+                    animateOn="view"
+                  />
+                </h3>
+                <p className="text-slate-400 text-sm">
+                  <DecryptedText
+                    key={animationKey + 1} // Разный ключ для второго компонента
+                    text="Никто не может прочитать ваши сообщения"
+                    speed={100}
+                    animateOn="view"
+                  />
+                </p>
               </div>
             </CardContent>
           </Card>
@@ -48,6 +89,15 @@ const Welcome = ({ onStart }: WelcomeProps) => {
         >
           Начать чат
           <ArrowRight className="w-5 h-5 ml-2" />
+        </Button>
+
+        <Button
+          onClick={onSettings}
+          variant="outline"
+          className="w-full border-slate-600 text-slate-300 bg-slate-600/50"
+        >
+          <Settings className="w-5 h-5 mr-2" />
+          Настройки
         </Button>
 
         <p className="text-center text-slate-500 text-sm">

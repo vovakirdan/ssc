@@ -1,0 +1,554 @@
+name: Simple Build and Release
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # Проверка изменений в коде
+  check-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      should-build: ${{ steps.check-changes.outputs.should-build }}
+      branch: ${{ github.ref_name }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Check for code changes
+        id: check-changes
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            # Для PR проверяем изменения между ветками
+            CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }}...HEAD)
+          else
+            # Для push проверяем изменения в последнем коммите
+            CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD)
+          fi
+          
+          echo "Changed files:"
+          echo "$CHANGED_FILES"
+          
+          # Проверяем, есть ли изменения в коде или конфигурации
+          CODE_CHANGES=false
+          if echo "$CHANGED_FILES" | grep -E "^(src/|src-tauri/)" > /dev/null; then
+            CODE_CHANGES=true
+          fi
+          
+          # Проверяем изменения в конфигурационных файлах
+          CONFIG_CHANGES=false
+          if echo "$CHANGED_FILES" | grep -E "^(package\.json|package-lock\.json|Cargo\.toml|Cargo\.lock|tauri\.conf\.json|vite\.config\.ts|tailwind\.config\.ts|tsconfig\.json)" > /dev/null; then
+            CONFIG_CHANGES=true
+          fi
+
+          # Проверяем изменения в workflow
+          WORKFLOW_CHANGES=false
+          if echo "$CHANGED_FILES" | grep -E "^(.github/workflows/ci-cd\.yml)" > /dev/null; then
+            WORKFLOW_CHANGES=true
+          fi
+          
+          # Собираем если есть изменения в коде или конфигурации
+          if [ "$CODE_CHANGES" = true ] || [ "$CONFIG_CHANGES" = true ] || [ "$WORKFLOW_CHANGES" = true ]; then
+            echo "should-build=true" >> $GITHUB_OUTPUT
+            echo "Code or config changes detected, will build"
+          else
+            echo "should-build=false" >> $GITHUB_OUTPUT
+            echo "No code or config changes detected, skipping build"
+          fi
+
+  # Проверка кода Rust
+  cargo-check:
+    runs-on: ubuntu-latest
+    needs: check-changes
+    if: needs.check-changes.outputs.should-build == 'true'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt update
+          sudo apt install libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
+      - name: Setup Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Cargo check
+        run: |
+          cd src-tauri
+          cargo check --verbose
+
+  # Сборка для Linux
+  build-linux:
+    runs-on: ubuntu-latest
+    needs: [check-changes, cargo-check]
+    if: needs.check-changes.outputs.should-build == 'true' && github.event_name != 'pull_request'
+    strategy:
+      matrix:
+        target: [x86_64-unknown-linux-gnu]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install system dependencies
+        run: |
+          sudo apt update
+          sudo apt install libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
+      - name: Setup Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+          target: ${{ matrix.target }}
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Cache npm dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+
+      - name: Cache Tauri build
+        uses: actions/cache@v4
+        with:
+          path: |
+            src-tauri/target
+            dist
+          key: ${{ runner.os }}-tauri-build-${{ hashFiles('**/Cargo.lock', '**/package-lock.json', 'src-tauri/tauri.conf.json') }}
+          restore-keys: |
+            ${{ runner.os }}-tauri-build-
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Install Tauri CLI
+        run: npm install -g @tauri-apps/cli@latest
+
+      - name: Build Tauri app
+        run: |
+          cd src-tauri
+          tauri build --target ${{ matrix.target }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-artifacts-${{ github.sha }}
+          path: |
+            src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage
+            src-tauri/target/${{ matrix.target }}/release/bundle/deb/*.deb
+            src-tauri/target/${{ matrix.target }}/release/bundle/rpm/*.rpm
+          retention-days: 30
+
+  # Сборка для Windows
+  build-windows:
+    runs-on: windows-latest
+    needs: [check-changes, cargo-check]
+    if: needs.check-changes.outputs.should-build == 'true' && github.event_name != 'pull_request'
+    strategy:
+      matrix:
+        target: [x86_64-pc-windows-msvc]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Setup Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+          target: ${{ matrix.target }}
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Cache npm dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+
+      - name: Cache Tauri build
+        uses: actions/cache@v4
+        with:
+          path: |
+            src-tauri/target
+            dist
+          key: ${{ runner.os }}-tauri-build-${{ hashFiles('**/Cargo.lock', '**/package-lock.json', 'src-tauri/tauri.conf.json') }}
+          restore-keys: |
+            ${{ runner.os }}-tauri-build-
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Install Tauri CLI
+        run: npm install -g @tauri-apps/cli@latest
+
+      - name: Build Tauri app
+        run: |
+          cd src-tauri
+          tauri build --target ${{ matrix.target }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-artifacts-${{ github.sha }}
+          path: |
+            src-tauri/target/${{ matrix.target }}/release/bundle/msi/*.msi
+            src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*-setup.exe
+          retention-days: 30
+
+  # Сборка для macOS
+  build-macos:
+    runs-on: macos-latest
+    needs: [check-changes, cargo-check]
+    if: needs.check-changes.outputs.should-build == 'true' && github.event_name != 'pull_request'
+    strategy:
+      matrix:
+        target: [x86_64-apple-darwin, aarch64-apple-darwin]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Setup Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+          target: ${{ matrix.target }}
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Cache npm dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+
+      - name: Cache Tauri build
+        uses: actions/cache@v4
+        with:
+          path: |
+            src-tauri/target
+            dist
+          key: ${{ runner.os }}-tauri-build-${{ hashFiles('**/Cargo.lock', '**/package-lock.json', 'src-tauri/tauri.conf.json') }}
+          restore-keys: |
+            ${{ runner.os }}-tauri-build-
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Install Tauri CLI
+        run: npm install -g @tauri-apps/cli@latest
+
+      - name: Build Tauri app
+        run: |
+          cd src-tauri
+          tauri build --target ${{ matrix.target }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-artifacts-${{ github.sha }}-${{ matrix.target }}
+          path: |
+            src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+            src-tauri/target/${{ matrix.target }}/release/bundle/app/*.app
+          retention-days: 30
+
+  # Сборка для Android
+  build-android:
+    name: 🔧 Build Android APK & AAB
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    needs: [check-changes, cargo-check]
+    if: needs.check-changes.outputs.should-build == 'true' && github.event_name != 'pull_request'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Setup Java (for Gradle)
+        uses: actions/setup-java@v3
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Setup Android SDK tools
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK Platforms & NDK
+        run: |
+          yes | sdkmanager --install "platform-tools" "platforms;android-33" "build-tools;33.0.0" "ndk;25.2.9519653"
+        env:
+          ANDROID_SDK_ROOT: ${{ env.ANDROID_SDK_ROOT }}
+
+      - name: Set up NDK_HOME
+        run: echo "NDK_HOME=$ANDROID_SDK_ROOT/ndk/25.2.9519653" >> $GITHUB_ENV
+
+      - name: Setup Rust with Android targets
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+          target: aarch64-linux-android
+
+      - name: Add Android Rust targets
+        run: |
+          rustup target add aarch64-linux-android
+          rustup target add armv7-linux-androideabi
+          rustup target add i686-linux-android
+          rustup target add x86_64-linux-android
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-android-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-android-cargo-
+
+      - name: Install dependencies & build web assets
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install Tauri CLI locally
+        run: npm install --save-dev @tauri-apps/cli@latest
+
+      - name: Debug environment
+        run: |
+          echo "ANDROID_SDK_ROOT: $ANDROID_SDK_ROOT"
+          echo "NDK_HOME: $NDK_HOME"
+          echo "Node version: $(node --version)"
+          echo "NPM version: $(npm --version)"
+          ls -la node_modules/.bin/ | grep tauri || echo "Tauri CLI not found"
+
+      - name: Initialize Android target
+        run: |
+          cd src-tauri
+          npx tauri android init --ci
+        env:
+          ANDROID_SDK_ROOT: ${{ env.ANDROID_SDK_ROOT }}
+          NDK_HOME: ${{ env.NDK_HOME }}
+
+      - name: Build release APK & AAB
+        run: |
+          cd src-tauri
+          npx tauri android build --apk --aab
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ANDROID_SDK_ROOT: ${{ env.ANDROID_SDK_ROOT }}
+          NDK_HOME: ${{ env.NDK_HOME }}
+
+      - name: Upload Android artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-artifacts-${{ github.sha }}
+          path: |
+            src-tauri/gen/android/app/build/outputs/apk/release/*.apk
+            src-tauri/gen/android/app/build/outputs/bundle/release/*.aab
+          retention-days: 30
+
+  # Создание релиза для main ветки
+  create-release:
+    runs-on: ubuntu-latest
+    needs: [build-linux, build-windows, build-macos, build-android]
+    if: needs.check-changes.outputs.branch == 'main'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Get version
+        id: get_version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Download all artifacts
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ steps.get_version.outputs.version }}
+          name: Release v${{ steps.get_version.outputs.version }}
+          body: |
+            ## Release v${{ steps.get_version.outputs.version }}
+            
+            ### Downloads
+            - **Linux**: AppImage, DEB, RPM packages
+            - **Windows**: MSI installer, NSIS setup
+            - **macOS**: DMG installer, App bundle (Intel & Apple Silicon)
+            - **Android**: APK and AAB files
+            
+            ### Changes
+            See the [changelog](https://github.com/${{ github.repository }}/commits/main) for details.
+          files: artifacts/**/*
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Создание pre-release для dev ветки
+  create-prerelease:
+    runs-on: ubuntu-latest
+    needs: [build-linux, build-windows, build-macos, build-android]
+    if: needs.check-changes.outputs.branch == 'dev'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Get version
+        id: get_version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Download all artifacts
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create Pre-release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ steps.get_version.outputs.version }}-dev.${{ github.run_number }}
+          name: Pre-release v${{ steps.get_version.outputs.version }}-dev.${{ github.run_number }}
+          body: |
+            ## Pre-release v${{ steps.get_version.outputs.version }}-dev.${{ github.run_number }}
+            
+            This is a pre-release build from the dev branch.
+            
+            ### Downloads
+            - **Linux**: AppImage, DEB, RPM packages
+            - **Windows**: MSI installer, NSIS setup
+            - **macOS**: DMG installer, App bundle (Intel & Apple Silicon)
+            - **Android**: APK and AAB files
+            
+            ### Changes
+            See the [changelog](https://github.com/${{ github.repository }}/commits/dev) for details.
+          files: artifacts/**/*
+          draft: false
+          prerelease: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
