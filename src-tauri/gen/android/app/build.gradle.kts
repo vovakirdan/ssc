@@ -15,14 +15,14 @@ val tauriProperties = Properties().apply {
 }
 
 android {
-    compileSdk = 34
+    compileSdk = 35
     namespace = "com.vladimirkirdan.ssc"
     defaultConfig {
         manifestPlaceholders["usesCleartextTraffic"] = "false"
         applicationId = "com.vladimirkirdan.ssc"
         minSdk = 24
-        targetSdk = 34
-        versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
+        targetSdk = 35
+        versionCode = tauriProperties.getProperty("tauri.android.versionCode", "2").toInt()
         versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
     }
     signingConfigs {
