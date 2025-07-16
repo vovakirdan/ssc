@@ -1,3 +1,3 @@
-package com.ssc.app
+package com.vladimirkirdan.ssc
 
 class MainActivity : TauriActivity()
