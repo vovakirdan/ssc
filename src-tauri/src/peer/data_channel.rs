@@ -7,10 +7,8 @@ use crate::peer::state::{
     MY_PUB, PENDING_REMOTE_CANDIDATES, TAG_LEN, WAS_CONNECTED,
 };
 use bytes::Bytes;
-use chacha20poly1305::aead::{Aead, KeyInit};
+use chacha20poly1305::aead::Aead;
 use ring::{agreement, rand as ring_rand};
-use sha2::Digest;
-use std::io::Read;
 use std::sync::Arc;
 use webrtc::data_channel::RTCDataChannel;
 

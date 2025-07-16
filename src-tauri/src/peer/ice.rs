@@ -4,8 +4,6 @@ use crate::peer::state::{
 };
 use crate::peer::types::{IceCandidate, ServerConfig};
 use crate::utils::add_ice_url_scheme;
-use chacha20poly1305::aead::KeyInit;
-use sha2::Digest;
 use std::sync::Arc;
 use std::time::Duration;
 use tauri::command;

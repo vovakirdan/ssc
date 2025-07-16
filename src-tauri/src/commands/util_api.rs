@@ -7,7 +7,6 @@ use crate::peer::state::{
 };
 use bytes::Bytes;
 use chacha20poly1305::aead::Aead;
-use std::io::Read;
 use tauri::command;
 
 /// текст по каналу

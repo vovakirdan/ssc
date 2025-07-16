@@ -1,9 +1,7 @@
 use crate::peer::crypto::CryptoCtx;
 use crate::peer::types::{IceCandidate, ServerConfig};
-use chacha20poly1305::aead::KeyInit;
 use once_cell::sync::Lazy;
 use ring::agreement;
-use sha2::Digest;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::AppHandle;
