@@ -22,7 +22,8 @@ use webrtc::{
     data_channel::{data_channel_init::RTCDataChannelInit, RTCDataChannel},
     ice_transport::ice_server::RTCIceServer,
     peer_connection::{
-        configuration::RTCConfiguration, peer_connection_state::RTCPeerConnectionState, RTCPeerConnection,
+        configuration::RTCConfiguration, peer_connection_state::RTCPeerConnectionState,
+        RTCPeerConnection,
     },
 };
 

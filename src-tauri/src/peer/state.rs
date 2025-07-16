@@ -5,10 +5,7 @@ use ring::agreement;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::AppHandle;
-use webrtc::{
-    data_channel::RTCDataChannel,
-    peer_connection::RTCPeerConnection,
-};
+use webrtc::{data_channel::RTCDataChannel, peer_connection::RTCPeerConnection};
 
 /// ========== GLOBAL STATE ==========
 

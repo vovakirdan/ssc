@@ -15,9 +15,7 @@ use webrtc::ice_transport::ice_candidate::RTCIceCandidateInit;
 use webrtc::{
     api::APIBuilder,
     ice_transport::{ice_gatherer_state::RTCIceGathererState, ice_server::RTCIceServer},
-    peer_connection::{
-        configuration::RTCConfiguration, RTCPeerConnection,
-    },
+    peer_connection::{configuration::RTCConfiguration, RTCPeerConnection},
 };
 
 /// Применяет ICE кандидат от удаленной стороны
