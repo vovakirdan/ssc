@@ -6,40 +6,13 @@ use crate::peer::state::{APP, COLLECTING_CANDIDATES, LOCAL_CANDIDATES, PEER};
 use crate::peer::types::{ConnectionBundle, SdpPayload};
 use crate::utils::random_id;
 use base64::{engine::general_purpose, Engine as _};
-use bytes::Bytes;
-use chacha20poly1305::{
-    aead::{Aead, KeyInit, Nonce},
-    ChaCha20Poly1305, Key,
-};
-use flate2::{read::GzDecoder, write::GzEncoder, Compression};
-use hkdf::Hkdf;
-use once_cell::sync::Lazy;
-use rand::Rng;
-use ring::{agreement, rand as ring_rand};
-use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
-use std::io::{Read, Write};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use chacha20poly1305::aead::KeyInit;
+use flate2::{write::GzEncoder, Compression};
+use sha2::Digest;
+use std::io::Write;
 use tauri::command;
-use tauri::{AppHandle, Emitter};
-use tokio::sync::mpsc;
-use tokio::time::sleep;
-use tokio::time::timeout;
-use webrtc::ice_transport::ice_candidate::RTCIceCandidate;
+use tauri::AppHandle;
 use webrtc::ice_transport::ice_candidate::RTCIceCandidateInit;
-use webrtc::peer_connection::policy::bundle_policy::RTCBundlePolicy;
-use webrtc::peer_connection::policy::rtcp_mux_policy::RTCRtcpMuxPolicy;
-use webrtc::{
-    api::APIBuilder,
-    data_channel::{data_channel_init::RTCDataChannelInit, RTCDataChannel},
-    ice_transport::{ice_gatherer_state::RTCIceGathererState, ice_server::RTCIceServer},
-    peer_connection::{
-        configuration::RTCConfiguration, peer_connection_state::RTCPeerConnectionState,
-        sdp::session_description::RTCSessionDescription, RTCPeerConnection,
-    },
-};
-use zeroize::{Zeroize, ZeroizeOnDrop};
 
 /// Генерация offer с полным набором ICE кандидатов
 #[command]
