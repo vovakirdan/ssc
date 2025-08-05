@@ -251,6 +251,19 @@ export default function Chat({onBack}: ChatProps) {
     onBack();
   };
 
+  // Функция для отладки состояния SAS
+  const checkSasStatus = async () => {
+    try {
+      const sasStatus = await invoke<boolean>('get_sas_status');
+      const isConnected = await invoke<boolean>('is_connected');
+      console.log('SAS Status Debug:', { sasStatus, isConnected });
+      toast.info(`SAS Status: ${sasStatus}, Is Connected: ${isConnected}`);
+    } catch (error) {
+      console.error('Error checking SAS status:', error);
+      toast.error('Error checking SAS status');
+    }
+  };
+
   const handleSend = async (e: FormEvent) => {
     e.preventDefault();
     if (!newMessage.trim()) return;
@@ -452,6 +465,14 @@ export default function Chat({onBack}: ChatProps) {
               </div>
             )}
           </div>
+          <Button
+            type="button"
+            onClick={checkSasStatus}
+            className="bg-blue-600 hover:bg-blue-700"
+            title="Debug SAS Status"
+          >
+            🔍
+          </Button>
           <Button
             type="submit"
             disabled={sending || !newMessage.trim() || status !== 'connected'}

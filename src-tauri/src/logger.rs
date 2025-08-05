@@ -91,12 +91,19 @@ pub fn emit_connected() {
 
 pub fn emit_disconnected() {
     log("emit_disconnected called - clearing all state");
+    
+    // Логируем текущий стек вызовов для отладки
+    log(&format!("emit_disconnected stack trace: {}", std::backtrace::Backtrace::capture()));
+    
     log("Clearing CRYPTO context in emit_disconnected");
     *CRYPTO.lock().unwrap() = None;
     *MY_PRIV.lock().unwrap() = None;
     *MY_PUB.lock().unwrap() = None;
     *WAS_CONNECTED.lock().unwrap() = false;
+    
+    let was_sas_confirmed = *SAS_CONFIRMED.lock().unwrap();
     *SAS_CONFIRMED.lock().unwrap() = false; // Сбрасываем флаг подтверждения SAS
+    log(&format!("SAS_CONFIRMED was: {}, now set to false", was_sas_confirmed));
 
     // очищаем отложенные кандидаты
     PENDING_REMOTE_CANDIDATES.lock().unwrap().clear();

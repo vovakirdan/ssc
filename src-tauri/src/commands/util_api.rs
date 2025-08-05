@@ -15,7 +15,16 @@ pub async fn send_text(text: String) -> bool {
     log(&format!("send_text called with: {}", text));
     
     // Проверяем, подтвержден ли SAS пользователем
-    if !*SAS_CONFIRMED.lock().unwrap() {
+    let sas_confirmed = *SAS_CONFIRMED.lock().unwrap();
+    let crypto_exists = CRYPTO.lock().unwrap().is_some();
+    let data_ch_exists = DATA_CH.lock().unwrap().is_some();
+    
+    log(&format!(
+        "send_text state check: sas_confirmed={}, crypto_exists={}, data_ch_exists={}",
+        sas_confirmed, crypto_exists, data_ch_exists
+    ));
+    
+    if !sas_confirmed {
         log("SAS not confirmed by user, not sending message");
         return false;
     }
@@ -102,7 +111,24 @@ pub fn get_fingerprint() -> Option<String> {
 /// проверка готовности соединения
 #[command]
 pub fn is_connected() -> bool {
-    CRYPTO.lock().unwrap().is_some() && *SAS_CONFIRMED.lock().unwrap()
+    let crypto_exists = CRYPTO.lock().unwrap().is_some();
+    let sas_confirmed = *SAS_CONFIRMED.lock().unwrap();
+    let result = crypto_exists && sas_confirmed;
+    
+    log(&format!(
+        "is_connected: crypto_exists={}, sas_confirmed={}, result={}",
+        crypto_exists, sas_confirmed, result
+    ));
+    
+    result
+}
+
+/// проверка состояния SAS
+#[command]
+pub fn get_sas_status() -> bool {
+    let sas_confirmed = *SAS_CONFIRMED.lock().unwrap();
+    log(&format!("get_sas_status: SAS_CONFIRMED={}", sas_confirmed));
+    sas_confirmed
 }
 
 /// ручное разъединение
