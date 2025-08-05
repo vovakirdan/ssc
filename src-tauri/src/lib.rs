@@ -28,6 +28,8 @@ pub fn run() {
             commands::util_api::get_fingerprint,
             commands::util_api::is_connected,
             commands::util_api::disconnect,
+            commands::util_api::confirm_sas,
+            commands::util_api::reject_sas,
             peer::ice::check_ice_server_availability,
             peer::connection::set_ice_servers,
             peer::connection::get_ice_servers,

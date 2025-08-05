@@ -3,6 +3,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Shield, ArrowLeft, Loader2 } from 'lucide-react';
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import DecryptedText from "@/components/text/DecryptedText";
 
 interface VerifyFingerprintProps {
@@ -19,71 +20,58 @@ const VerifyFingerprint = ({ onConfirm, onCancel }: VerifyFingerprintProps) => {
   console.log('VerifyFingerprint: Component mounted/rendered');
 
   useEffect(() => {
-    const getFingerprint = async () => {
-      try {
-        setIsLoading(true);
-        setError(null);
-        
-        // Даем crypto context время на полную инициализацию
-        await new Promise(resolve => setTimeout(resolve, 500));
-        
-        // Сначала проверяем соединение
-        const connected = await invoke<boolean>("is_connected");
-        
-        if (!connected) {
-          setError("Соединение не установлено");
-          return;
-        }
-        
-        // Получаем отпечаток с несколькими попытками
-        let fp: string | null = null;
-        let attempts = 0;
-        const maxAttempts = 5;
-        
-        while (attempts < maxAttempts && !fp) {
-          try {
-            fp = await invoke<string>("get_fingerprint");
-            console.log(`VerifyFingerprint: Attempt ${attempts + 1}, fingerprint:`, fp);
-            if (fp && fp.trim() !== "") {
-              console.log('VerifyFingerprint: Successfully got fingerprint:', fp);
-              setFingerprint(fp);
-              return;
-            }
-          } catch (err) {
-            console.warn(`VerifyFingerprint: Attempt ${attempts + 1} failed:`, err);
-          }
-          
-          attempts++;
-          if (attempts < maxAttempts) {
-            await new Promise(resolve => setTimeout(resolve, 200));
-          }
-        }
-        
-        setError("Не удалось получить отпечаток");
-      } catch (error) {
-        console.error("Ошибка получения отпечатка:", error);
-        setError("Ошибка получения отпечатка");
-      } finally {
-        setIsLoading(false);
-      }
-    };
+    // Слушаем событие ssc-sas от Rust
+    const unlistenSas = listen<string>('ssc-sas', (event) => {
+      console.log('VerifyFingerprint: Received ssc-sas event:', event.payload);
+      setFingerprint(event.payload);
+      setIsLoading(false);
+      setError(null);
+    });
 
-    getFingerprint();
-  }, []);
-
-  const handleConfirm = () => {
-    if (fingerprint && checked) {
+    // Слушаем событие ssc-connected (после подтверждения SAS)
+    const unlistenConnected = listen('ssc-connected', () => {
+      console.log('VerifyFingerprint: Received ssc-connected event');
       onConfirm();
+    });
+
+    // Слушаем событие ssc-disconnected
+    const unlistenDisconnected = listen('ssc-disconnected', () => {
+      console.log('VerifyFingerprint: Received ssc-disconnected event');
+      setError("Соединение разорвано");
+      setIsLoading(false);
+    });
+
+    // Очистка слушателей при размонтировании
+    return () => {
+      unlistenSas.then(f => f());
+      unlistenConnected.then(f => f());
+      unlistenDisconnected.then(f => f());
+    };
+  }, [onConfirm]);
+
+  const handleConfirm = async () => {
+    if (fingerprint && checked) {
+      try {
+        console.log('VerifyFingerprint: Confirming SAS');
+        await invoke('confirm_sas');
+        // onConfirm() будет вызван автоматически через событие ssc-connected
+      } catch (error) {
+        console.error('Ошибка подтверждения SAS:', error);
+        setError("Ошибка подтверждения SAS");
+      }
     }
   };
 
   const handleCancel = async () => {
     try {
-      await invoke('disconnect');
+      console.log('VerifyFingerprint: Rejecting SAS');
+      await invoke('reject_sas');
+      onCancel();
     } catch (error) {
-      console.error('Ошибка отключения:', error);
+      console.error('Ошибка отклонения SAS:', error);
+      // Даже если произошла ошибка, все равно отменяем
+      onCancel();
     }
-    onCancel();
   };
 
   return (
@@ -106,8 +94,8 @@ const VerifyFingerprint = ({ onConfirm, onCancel }: VerifyFingerprintProps) => {
             {isLoading ? (
               <div className="text-center">
                 <Loader2 className="w-8 h-8 text-emerald-500 animate-spin mx-auto mb-4" />
-                <p className="text-white font-semibold">Получение отпечатка...</p>
-                <p className="text-slate-400 text-sm mt-2">Подождите, идет подключение к собеседнику</p>
+                <p className="text-white font-semibold">Ожидание отпечатка...</p>
+                <p className="text-slate-400 text-sm mt-2">Подождите, идет установка защищенного соединения</p>
               </div>
             ) : error ? (
               <div className="text-center">

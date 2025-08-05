@@ -1,6 +1,6 @@
 use crate::peer::state::{
     APP, COLLECTING_CANDIDATES, CRYPTO, LOCAL_CANDIDATES, MY_PRIV, MY_PUB,
-    PENDING_REMOTE_CANDIDATES, WAS_CONNECTED,
+    PENDING_REMOTE_CANDIDATES, SAS_CONFIRMED, WAS_CONNECTED,
 };
 use tauri::Emitter;
 use webrtc::ice_transport::ice_candidate::RTCIceCandidate;
@@ -69,6 +69,20 @@ fn emit_state(evt: &str) {
     }
 }
 
+/// Отправка SAS (fingerprint) на UI для подтверждения пользователем
+pub fn emit_sas_to_ui(sas: &str) {
+    log(&format!("emit_sas_to_ui called with SAS: {}", sas));
+    if let Some(app) = APP.lock().unwrap().clone() {
+        log("APP handle exists, emitting ssc-sas event");
+        match app.emit("ssc-sas", sas) {
+            Ok(_) => log("Successfully emitted ssc-sas event"),
+            Err(e) => log(&format!("Failed to emit ssc-sas event: {:?}", e)),
+        }
+    } else {
+        log("APP handle is None, cannot emit ssc-sas event");
+    }
+}
+
 pub fn emit_connected() {
     log("emit_connected called - setting WAS_CONNECTED flag");
     *WAS_CONNECTED.lock().unwrap() = true;
@@ -82,6 +96,7 @@ pub fn emit_disconnected() {
     *MY_PRIV.lock().unwrap() = None;
     *MY_PUB.lock().unwrap() = None;
     *WAS_CONNECTED.lock().unwrap() = false;
+    *SAS_CONFIRMED.lock().unwrap() = false; // Сбрасываем флаг подтверждения SAS
 
     // очищаем отложенные кандидаты
     PENDING_REMOTE_CANDIDATES.lock().unwrap().clear();

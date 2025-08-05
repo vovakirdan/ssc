@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { listen } from "@tauri-apps/api/event";
 import Welcome from './Welcome';
 import GenerateQR from './GenerateQR';
 import ScanQR from './ScanQR';
@@ -27,6 +28,18 @@ const Index = () => {
         console.error('Error parsing saved settings:', error);
       }
     }
+  }, []);
+
+  // Слушаем событие ssc-sas для автоматического перехода к проверке SAS
+  useEffect(() => {
+    const unlistenSas = listen<string>('ssc-sas', (event) => {
+      console.log('Index: Received ssc-sas event, switching to verify mode:', event.payload);
+      setMode('verify');
+    });
+
+    return () => {
+      unlistenSas.then(f => f());
+    };
   }, []);
 
   const handleStart = () => {

@@ -1,10 +1,10 @@
 use crate::commands::util_api::get_fingerprint;
 use crate::logger::log;
-use crate::logger::{emit_connected, emit_disconnected, emit_message};
+use crate::logger::{emit_disconnected, emit_message, emit_sas_to_ui};
 use crate::peer::crypto::{build_ctx, u64_to_nonce};
 use crate::peer::state::{
-    APP, COLLECTING_CANDIDATES, CRYPTO, DATA_CH, DISCONNECT_TASK, LOCAL_CANDIDATES, MY_PRIV,
-    MY_PUB, PENDING_REMOTE_CANDIDATES, TAG_LEN, WAS_CONNECTED,
+    COLLECTING_CANDIDATES, CRYPTO, DATA_CH, DISCONNECT_TASK, LOCAL_CANDIDATES, MY_PRIV,
+    MY_PUB, PENDING_REMOTE_CANDIDATES, SAS_CONFIRMED, TAG_LEN, WAS_CONNECTED,
 };
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
@@ -30,6 +30,7 @@ pub fn attach_dc(dc: &Arc<RTCDataChannel>) {
     *MY_PRIV.lock().unwrap() = None;
     *MY_PUB.lock().unwrap() = None;
     *WAS_CONNECTED.lock().unwrap() = false;
+    *SAS_CONFIRMED.lock().unwrap() = false; // Сбрасываем флаг подтверждения SAS
 
     // очищаем отложенные кандидаты
     PENDING_REMOTE_CANDIDATES.lock().unwrap().clear();
@@ -94,11 +95,16 @@ pub fn attach_dc(dc: &Arc<RTCDataChannel>) {
 
                         // Строим криптографический контекст
                         let ctx = build_ctx(&peer_pub);
-                        log(&format!("SAS generated: {}", ctx.sas));
+                        let sas = ctx.sas.clone();
+                        log(&format!("SAS generated: {}", sas));
                         *CRYPTO.lock().unwrap() = Some(ctx);
 
-                        // Всегда отправляем событие подключения после установки криптографического контекста
-                        log("Crypto context established, sending connected event");
+                        // Отправляем SAS на UI для подтверждения пользователем
+                        emit_sas_to_ui(&sas);
+                        log("SAS sent to UI for user confirmation");
+
+                        // НЕ отправляем событие подключения сразу - ждем подтверждения SAS
+                        log("Crypto context established, waiting for SAS confirmation");
 
                         // Проверим, что fingerprint доступен сразу после создания контекста
                         let _test_fp = get_fingerprint();
@@ -107,17 +113,6 @@ pub fn attach_dc(dc: &Arc<RTCDataChannel>) {
                             _test_fp
                         ));
 
-                        // Проверим APP handle перед отправкой события
-                        let _app_exists = APP.lock().unwrap().is_some();
-                        log(&format!(
-                            "APP handle exists before emit_connected: {}",
-                            _app_exists
-                        ));
-
-                        // Отправляем событие подключения
-                        log("Sending ssc-connected event immediately");
-                        emit_connected();
-
                         return Box::pin(async {});
                     }
                 }
@@ -125,6 +120,12 @@ pub fn attach_dc(dc: &Arc<RTCDataChannel>) {
         }
 
         // ----- иначе зашифрованное сообщение -----
+        // Проверяем, подтвержден ли SAS пользователем
+        if !*SAS_CONFIRMED.lock().unwrap() {
+            log("SAS not confirmed by user, ignoring encrypted message");
+            return Box::pin(async {});
+        }
+
         let mut lock = CRYPTO.lock().unwrap();
         if let Some(ref mut ctx) = *lock {
             if msg.data.len() < TAG_LEN {
