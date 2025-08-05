@@ -9,18 +9,28 @@ import DecryptedText from "@/components/text/DecryptedText";
 interface VerifyFingerprintProps {
   onConfirm: () => void;
   onCancel: () => void;
+  initialSas?: string | null; // Опциональный начальный SAS
 }
 
-const VerifyFingerprint = ({ onConfirm, onCancel }: VerifyFingerprintProps) => {
-  const [fingerprint, setFingerprint] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+const VerifyFingerprint = ({ onConfirm, onCancel, initialSas }: VerifyFingerprintProps) => {
+  const [fingerprint, setFingerprint] = useState<string | null>(initialSas || null);
+  const [isLoading, setIsLoading] = useState(!initialSas); // Если есть initialSas, не показываем загрузку
   const [checked, setChecked] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  console.log('VerifyFingerprint: Component mounted/rendered');
+  console.log('VerifyFingerprint: Component mounted/rendered, initialSas:', initialSas);
 
   useEffect(() => {
-    // Слушаем событие ssc-sas от Rust
+    // Если у нас уже есть initialSas, используем его
+    if (initialSas) {
+      console.log('VerifyFingerprint: Using initialSas:', initialSas);
+      setFingerprint(initialSas);
+      setIsLoading(false);
+      setError(null);
+      return;
+    }
+
+    // Слушаем событие ssc-sas от Rust (только если нет initialSas)
     const unlistenSas = listen<string>('ssc-sas', (event) => {
       console.log('VerifyFingerprint: Received ssc-sas event:', event.payload);
       setFingerprint(event.payload);
@@ -47,7 +57,7 @@ const VerifyFingerprint = ({ onConfirm, onCancel }: VerifyFingerprintProps) => {
       unlistenConnected.then(f => f());
       unlistenDisconnected.then(f => f());
     };
-  }, [onConfirm]);
+  }, [onConfirm, initialSas]);
 
   const handleConfirm = async () => {
     if (fingerprint && checked) {

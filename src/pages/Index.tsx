@@ -14,6 +14,7 @@ const Index = () => {
   const [mode, setMode] = useState<AppMode>('welcome');
   const [showOptions, setShowOptions] = useState(false);
   const [ttl, setTtl] = useState(5); // TTL по умолчанию 5 минут
+  const [pendingSas, setPendingSas] = useState<string | null>(null); // Сохраняем SAS для передачи в VerifyFingerprint
 
   // Загружаем TTL из настроек при монтировании
   useEffect(() => {
@@ -34,6 +35,7 @@ const Index = () => {
   useEffect(() => {
     const unlistenSas = listen<string>('ssc-sas', (event) => {
       console.log('Index: Received ssc-sas event, switching to verify mode:', event.payload);
+      setPendingSas(event.payload); // Сохраняем SAS
       setMode('verify');
     });
 
@@ -87,6 +89,18 @@ const Index = () => {
     setMode('verify');
   };
 
+  // Очищаем pendingSas при переходе к чату
+  const handleVerifyConfirm = () => {
+    setPendingSas(null);
+    setMode('chat');
+  };
+
+  // Очищаем pendingSas при отмене
+  const handleVerifyCancel = () => {
+    setPendingSas(null);
+    setMode('welcome');
+  };
+
   if (mode === 'settings') {
     return <Settings onBack={handleBack} />;
   }
@@ -97,8 +111,9 @@ const Index = () => {
 
   if (mode === 'verify') {
     return <VerifyFingerprint 
-      onConfirm={() => setMode('chat')} 
-      onCancel={() => setMode('welcome')} 
+      onConfirm={handleVerifyConfirm} 
+      onCancel={handleVerifyCancel}
+      initialSas={pendingSas} // Передаем сохраненный SAS
     />;
   }
 
