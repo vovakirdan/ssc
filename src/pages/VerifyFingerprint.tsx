@@ -27,24 +27,25 @@ const VerifyFingerprint = ({ onConfirm, onCancel, initialSas }: VerifyFingerprin
       setFingerprint(initialSas);
       setIsLoading(false);
       setError(null);
-      return;
     }
 
     // Слушаем событие ssc-sas от Rust (только если нет initialSas)
-    const unlistenSas = listen<string>('ssc-sas', (event) => {
-      console.log('VerifyFingerprint: Received ssc-sas event:', event.payload);
-      setFingerprint(event.payload);
-      setIsLoading(false);
-      setError(null);
-    });
+    const unlistenSas = initialSas ? 
+      Promise.resolve(() => {}) : // Пустая функция если initialSas есть
+      listen<string>('ssc-sas', (event) => {
+        console.log('VerifyFingerprint: Received ssc-sas event:', event.payload);
+        setFingerprint(event.payload);
+        setIsLoading(false);
+        setError(null);
+      });
 
-    // Слушаем событие ssc-connected (после подтверждения SAS)
+    // Всегда слушаем событие ssc-connected (после подтверждения SAS)
     const unlistenConnected = listen('ssc-connected', () => {
       console.log('VerifyFingerprint: Received ssc-connected event');
       onConfirm();
     });
 
-    // Слушаем событие ssc-disconnected
+    // Всегда слушаем событие ssc-disconnected
     const unlistenDisconnected = listen('ssc-disconnected', () => {
       console.log('VerifyFingerprint: Received ssc-disconnected event');
       setError("Соединение разорвано");
@@ -63,12 +64,15 @@ const VerifyFingerprint = ({ onConfirm, onCancel, initialSas }: VerifyFingerprin
     if (fingerprint && checked) {
       try {
         console.log('VerifyFingerprint: Confirming SAS');
-        await invoke('confirm_sas');
+        const result = await invoke('confirm_sas');
+        console.log('VerifyFingerprint: confirm_sas result:', result);
         // onConfirm() будет вызван автоматически через событие ssc-connected
       } catch (error) {
         console.error('Ошибка подтверждения SAS:', error);
         setError("Ошибка подтверждения SAS");
       }
+    } else {
+      console.log('VerifyFingerprint: Cannot confirm - fingerprint:', fingerprint, 'checked:', checked);
     }
   };
 
