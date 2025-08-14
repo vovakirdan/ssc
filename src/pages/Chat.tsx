@@ -125,6 +125,10 @@ export default function Chat({onBack}: ChatProps) {
     register('ssc-connected', () => {
       setStatus('connected');
       statusRef.current = 'connected';
+      // Автоматически подтверждаем SAS, чтобы разблокировать отправку сообщений
+      invoke<boolean>('confirm_sas').catch((e) => {
+        console.error('confirm_sas error', e);
+      });
     });
     register('ssc-connection-problem', () => {
       setStatus('problem');
