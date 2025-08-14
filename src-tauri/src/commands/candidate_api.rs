@@ -1,13 +1,11 @@
 use crate::logger::log;
 use crate::peer::connection::new_peer;
-use crate::peer::crypto::dec_bundle;
+use crate::peer::crypto::{dec_bundle, enc_bundle};
 use crate::peer::ice::{analyze_candidates, wait_for_candidates};
 use crate::peer::state::{APP, COLLECTING_CANDIDATES, LOCAL_CANDIDATES, PEER};
 use crate::peer::types::{ConnectionBundle, SdpPayload};
 use crate::utils::random_id;
-use base64::{engine::general_purpose, Engine as _};
-use flate2::{write::GzEncoder, Compression};
-use std::io::Write;
+ 
 use tauri::command;
 use tauri::AppHandle;
 use webrtc::ice_transport::ice_candidate::RTCIceCandidateInit;
@@ -48,12 +46,8 @@ pub async fn generate_offer_with_candidates(app: AppHandle) -> String {
         ice_candidates: candidates,
     };
 
-    // Кодируем всё вместе
-    let json = serde_json::to_vec(&bundle).unwrap();
-    let mut gz = GzEncoder::new(Vec::new(), Compression::fast());
-    gz.write_all(&json).unwrap();
-    let compressed = gz.finish().unwrap();
-    general_purpose::STANDARD.encode(compressed)
+    // Компактное кодирование бандла
+    enc_bundle(&bundle)
 }
 
 /// Принятие offer с полным набором ICE кандидатов
@@ -117,12 +111,8 @@ pub async fn accept_offer_with_candidates(app: AppHandle, encoded: String) -> St
         ice_candidates: candidates,
     };
 
-    // Кодируем всё вместе
-    let json = serde_json::to_vec(&bundle).unwrap();
-    let mut gz = GzEncoder::new(Vec::new(), Compression::fast());
-    gz.write_all(&json).unwrap();
-    let compressed = gz.finish().unwrap();
-    general_purpose::STANDARD.encode(compressed)
+    // Компактное кодирование бандла
+    enc_bundle(&bundle)
 }
 
 /// Установка answer с полным набором ICE кандидатов
