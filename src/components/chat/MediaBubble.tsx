@@ -23,15 +23,36 @@ export const MediaBubble: FC<Props> = ({ media, isOwn }) => {
   const canPreviewImage = Boolean(media.dataUrl && media.mime.startsWith('image/'));
   const canDownload = Boolean(media.dataUrl);
 
-  const handleSave = () => {
-    // Простейшее сохранение через скрытую ссылку
+  const handleSave = async () => {
     if (!media.dataUrl) return;
-    const a = document.createElement('a');
-    a.href = media.dataUrl;
-    a.download = media.name || 'file';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+    // Сперва пробуем стандартный способ через ссылку с атрибутом download
+    try {
+      const a = document.createElement('a');
+      a.href = media.dataUrl;
+      a.download = media.name || 'file';
+      a.rel = 'noopener';
+      a.target = '_self';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      return;
+    } catch (_) {}
+
+    // Фолбэк: конвертируем в Blob и сохраняем через objectURL
+    try {
+      const resp = await fetch(media.dataUrl);
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = media.name || 'file';
+      a.rel = 'noopener';
+      a.target = '_self';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (_) {}
   };
 
   return (
