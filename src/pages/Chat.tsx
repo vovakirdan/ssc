@@ -341,7 +341,7 @@ export default function Chat({onBack}: ChatProps) {
     }
 
     const id = `${Date.now()}-${file.name}`;
-    const chunkSize = 64 * 1024; // 64KB
+    const chunkSize = 8 * 1024; // 8KB — безопаснее для DataChannel
     const totalChunks = Math.ceil(file.size / chunkSize);
 
     // Добавляем локальное сообщение с прогрессом
@@ -356,6 +356,20 @@ export default function Chat({onBack}: ChatProps) {
       },
     ]);
 
+    // Предпросмотр: читаем файл в data URL параллельно и обновляем локальное сообщение
+    try {
+      const previewUrl = await new Promise<string>((resolve) => {
+        const fr = new FileReader();
+        fr.onload = () => resolve(fr.result as string);
+        fr.readAsDataURL(file);
+      });
+      setMessages((p) => p.map((m) =>
+        m.id === id && m.media ? { ...m, media: { ...m.media, dataUrl: previewUrl } } : m
+      ));
+    } catch (e) {
+      console.error('preview generate error', e);
+    }
+
     try {
       // Отправляем метаданные
       const okMeta = await invoke<boolean>('send_media_start', {
@@ -367,25 +381,37 @@ export default function Chat({onBack}: ChatProps) {
       });
       if (!okMeta) throw new Error('send_media_start failed');
 
-      // Читаем и отправляем чанки по очереди
-      const reader = file.stream().getReader();
+      // Читаем и отправляем чанки по очереди (совместимо с WebView без File.stream())
       let index = 0;
       let sentBytes = 0;
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        if (value) {
-          sentBytes += value.byteLength;
-          const b64 = btoa(String.fromCharCode(...Array.from(new Uint8Array(value))));
-          const okChunk = await invoke<boolean>('send_media_chunk', { id, index, data: b64 });
-          if (!okChunk) throw new Error(`send_media_chunk failed for ${index}`);
-          index++;
-          setMessages((p) => p.map((m) =>
-            m.id === id && m.media ? { ...m, media: { ...m.media, progress: Math.min(1, sentBytes / file.size) } } : m
-          ));
-          // Мелкая задержка, чтобы не забить буфер
-          await new Promise((r) => setTimeout(r, 5));
+      const toBase64 = (ab: ArrayBuffer) => {
+        const bytes = new Uint8Array(ab);
+        let binary = '';
+        // Небольшие порции, чтобы не упереться в лимиты аргументов/стека
+        const step = 8192;
+        for (let i = 0; i < bytes.length; i += step) {
+          const sub = bytes.subarray(i, Math.min(i + step, bytes.length));
+          let chunkStr = '';
+          for (let j = 0; j < sub.length; j++) chunkStr += String.fromCharCode(sub[j]);
+          binary += chunkStr;
         }
+        return btoa(binary);
+      };
+
+      for (let offset = 0; offset < file.size; offset += chunkSize) {
+        const end = Math.min(offset + chunkSize, file.size);
+        const blob = file.slice(offset, end);
+        const ab = await blob.arrayBuffer();
+        const b64 = toBase64(ab);
+        const okChunk = await invoke<boolean>('send_media_chunk', { id, index, data: b64 });
+        if (!okChunk) throw new Error(`send_media_chunk failed for ${index}`);
+        index++;
+        sentBytes = end;
+        setMessages((p) => p.map((m) =>
+          m.id === id && m.media ? { ...m, media: { ...m.media, progress: Math.min(1, sentBytes / file.size) } } : m
+        ));
+        // Мелкая задержка, чтобы не забить буфер
+        await new Promise((r) => setTimeout(r, 5));
       }
 
       const okEnd = await invoke<boolean>('send_media_end', { id });
@@ -519,11 +545,12 @@ export default function Chat({onBack}: ChatProps) {
               </motion.div>
             ) : (
               messages.map((m, index) => (
-                <MessageBubble 
-                  key={m.id} 
-                  msg={m} 
-                  index={index}
-                />
+                <motion.div key={m.id} layout>
+                  <MessageBubble 
+                    msg={m} 
+                    index={index}
+                  />
+                </motion.div>
               ))
             )}
           </AnimatePresence>

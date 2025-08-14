@@ -183,8 +183,8 @@ pub async fn send_media_start(id: String, name: String, mime: String, size: u64,
 #[command]
 pub async fn send_media_chunk(id: String, index: u32, data: String) -> bool {
     // Простейшая защита от слишком больших чанков, чтобы не переполнить буфер
-    if data.len() > 128 * 1024 { // ~128KB символов base64
-        log("Media chunk too large (>128KB base64), rejecting");
+    if data.len() > 32 * 1024 { // ~32KB base64 → ~24KB бинарных, чтобы не переполнить буфер
+        log("Media chunk too large (>32KB base64), rejecting");
         return false;
     }
 

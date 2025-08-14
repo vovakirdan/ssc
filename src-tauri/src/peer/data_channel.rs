@@ -146,13 +146,15 @@ pub fn attach_dc(dc: &Arc<RTCDataChannel>) {
 
                 if text.starts_with("MEDIA_CHUNK:") {
                     let json = &text[12..];
-                    match serde_json::from_str::<crate::commands::util_api::MediaChunk>(json) {
+                            match serde_json::from_str::<crate::commands::util_api::MediaChunk>(json) {
                         Ok(chunk) => {
                             use base64::Engine;
                             let engine = base64::engine::general_purpose::STANDARD;
                             match engine.decode(chunk.data.as_bytes()) {
                                 Ok(bytes) => {
-                                    if let Some(buf) = MEDIA_BUFFERS.lock().unwrap().get_mut(&chunk.id) {
+                                            if bytes.len() > 64 * 1024 {
+                                                log("Single MEDIA_CHUNK payload too large (>64KB), dropping");
+                                            } else if let Some(buf) = MEDIA_BUFFERS.lock().unwrap().get_mut(&chunk.id) {
                                         buf.extend_from_slice(&bytes);
                                         if let Some(info) = MEDIA_INFO.lock().unwrap().get_mut(&chunk.id) {
                                             info.4 += 1; // received_chunks
@@ -260,7 +262,9 @@ pub fn attach_dc(dc: &Arc<RTCDataChannel>) {
                                     let engine = base64::engine::general_purpose::STANDARD;
                                     match engine.decode(chunk.data.as_bytes()) {
                                         Ok(bytes) => {
-                                            if let Some(buf) = MEDIA_BUFFERS.lock().unwrap().get_mut(&chunk.id) {
+                                            if bytes.len() > 64 * 1024 {
+                                                log("Single MEDIA_CHUNK payload too large (>64KB), dropping (enc)");
+                                            } else if let Some(buf) = MEDIA_BUFFERS.lock().unwrap().get_mut(&chunk.id) {
                                                 buf.extend_from_slice(&bytes);
                                                 if let Some(info) = MEDIA_INFO.lock().unwrap().get_mut(&chunk.id) {
                                                     info.4 += 1;
