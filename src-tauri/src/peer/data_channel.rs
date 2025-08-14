@@ -1,11 +1,13 @@
 use crate::commands::util_api::get_fingerprint;
 use crate::logger::log;
-use crate::logger::{emit_connected, emit_disconnected, emit_message};
+use crate::logger::{emit_disconnected, emit_message, emit_sas_to_ui};
 use crate::peer::crypto::{build_ctx, u64_to_nonce};
 use crate::peer::state::{
-    APP, COLLECTING_CANDIDATES, CRYPTO, DATA_CH, DISCONNECT_TASK, LOCAL_CANDIDATES, MY_PRIV,
-    MY_PUB, PENDING_REMOTE_CANDIDATES, TAG_LEN, WAS_CONNECTED,
+    COLLECTING_CANDIDATES, CRYPTO, DATA_CH, DISCONNECT_TASK, LOCAL_CANDIDATES, MY_PRIV,
+    MY_PUB, PENDING_REMOTE_CANDIDATES, SAS_CONFIRMED, TAG_LEN, WAS_CONNECTED,
 };
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine;
 use bytes::Bytes;
 use chacha20poly1305::aead::Aead;
 use ring::{agreement, rand as ring_rand};
@@ -28,6 +30,7 @@ pub fn attach_dc(dc: &Arc<RTCDataChannel>) {
     *MY_PRIV.lock().unwrap() = None;
     *MY_PUB.lock().unwrap() = None;
     *WAS_CONNECTED.lock().unwrap() = false;
+    *SAS_CONFIRMED.lock().unwrap() = false; // Сбрасываем флаг подтверждения SAS
 
     // очищаем отложенные кандидаты
     PENDING_REMOTE_CANDIDATES.lock().unwrap().clear();
@@ -60,7 +63,10 @@ pub fn attach_dc(dc: &Arc<RTCDataChannel>) {
             tauri::async_runtime::spawn({
                 let dc = dc.clone();
                 async move {
-                    let _result = dc.send(&Bytes::from(my_pub.as_ref().to_vec())).await;
+                    // Отправляем публичный ключ в новом формате: PUBKEY:{base64_encoded_key}
+                    let pubkey_b64 = STANDARD.encode(my_pub.as_ref());
+                    let msg = format!("PUBKEY:{}", pubkey_b64);
+                    let _result = dc.send(&Bytes::from(msg)).await;
                     log(&format!("Sent pub key: {}", hex::encode(my_pub.as_ref())));
                 }
             });
@@ -71,47 +77,55 @@ pub fn attach_dc(dc: &Arc<RTCDataChannel>) {
     dc.on_message(Box::new(|msg| {
         log(&format!("Received message, length: {}", msg.data.len()));
 
-        // ----- если это 32-байтовый pub-key -----
-        if msg.data.len() == 32 {
-            let peer_pub = <[u8; 32]>::try_from(&msg.data[..32]).unwrap();
-            log(&format!("Received pub key: {}", hex::encode(&peer_pub)));
+        // Пробуем разобрать как строку для обработки PUBKEY сообщений
+        if let Ok(text) = std::str::from_utf8(&msg.data) {
+            if let Some(rest) = text.strip_prefix("PUBKEY:") {
+                // Декодируем base64
+                if let Ok(pub_bytes) = STANDARD.decode(rest) {
+                    if pub_bytes.len() == 32 {
+                        let mut peer_pub = [0u8; 32];
+                        peer_pub.copy_from_slice(&pub_bytes);
+                        log(&format!("Received pub key: {}", hex::encode(&peer_pub)));
 
-            // Проверяем, не создали ли мы уже криптографический контекст
-            if CRYPTO.lock().unwrap().is_some() {
-                log("Crypto context already exists, skipping...");
-                return Box::pin(async {});
+                        // Проверяем, не создали ли мы уже криптографический контекст
+                        if CRYPTO.lock().unwrap().is_some() {
+                            log("Crypto context already exists, skipping...");
+                            return Box::pin(async {});
+                        }
+
+                        // Строим криптографический контекст
+                        let ctx = build_ctx(&peer_pub);
+                        let sas = ctx.sas.clone();
+                        log(&format!("SAS generated: {}", sas));
+                        *CRYPTO.lock().unwrap() = Some(ctx);
+
+                        // Отправляем SAS на UI для подтверждения пользователем
+                        emit_sas_to_ui(&sas);
+                        log("SAS sent to UI for user confirmation");
+
+                        // НЕ отправляем событие подключения сразу - ждем подтверждения SAS
+                        log("Crypto context established, waiting for SAS confirmation");
+
+                        // Проверим, что fingerprint доступен сразу после создания контекста
+                        let _test_fp = get_fingerprint();
+                        log(&format!(
+                            "Fingerprint immediately after context creation: {:?}",
+                            _test_fp
+                        ));
+
+                        return Box::pin(async {});
+                    }
+                }
             }
-
-            // Строим криптографический контекст
-            let ctx = build_ctx(&peer_pub);
-            log(&format!("SAS generated: {}", ctx.sas));
-            *CRYPTO.lock().unwrap() = Some(ctx);
-
-            // Всегда отправляем событие подключения после установки криптографического контекста
-            log("Crypto context established, sending connected event");
-
-            // Проверим, что fingerprint доступен сразу после создания контекста
-            let _test_fp = get_fingerprint();
-            log(&format!(
-                "Fingerprint immediately after context creation: {:?}",
-                _test_fp
-            ));
-
-            // Проверим APP handle перед отправкой события
-            let _app_exists = APP.lock().unwrap().is_some();
-            log(&format!(
-                "APP handle exists before emit_connected: {}",
-                _app_exists
-            ));
-
-            // Отправляем событие подключения
-            log("Sending ssc-connected event immediately");
-            emit_connected();
-
-            return Box::pin(async {});
         }
 
         // ----- иначе зашифрованное сообщение -----
+        // Проверяем, подтвержден ли SAS пользователем
+        if !*SAS_CONFIRMED.lock().unwrap() {
+            log("SAS not confirmed by user, ignoring encrypted message");
+            return Box::pin(async {});
+        }
+
         let mut lock = CRYPTO.lock().unwrap();
         if let Some(ref mut ctx) = *lock {
             if msg.data.len() < TAG_LEN {

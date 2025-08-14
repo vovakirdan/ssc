@@ -31,7 +31,9 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             # Для PR проверяем изменения между ветками
-            CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }}...HEAD)
+            # Явно подтягиваем базовую ветку, чтобы ссылка origin/${{ github.base_ref }} существовала
+            git fetch origin ${{ github.base_ref }} --depth=1
+            CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }}..HEAD)
           else
             # Для push проверяем изменения в последнем коммите
             CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD)
