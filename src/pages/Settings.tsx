@@ -31,9 +31,11 @@ interface ServerConfig {
 interface SettingsData {
   servers: ServerConfig[];
   offerTTL: number;
+  maxMediaMB?: number; // макс размер медиа на отправку (1..10)
 }
 
 const TTL_VALUES = [1, 2, 5, 10, 60]; // minutes
+const MEDIA_VALUES = [16, 32, 64, 128, 256, 512, 1024]; // MB
 
 const Settings = ({ onBack }: SettingsProps) => {
   const [settings, setSettings] = useState<SettingsData>({
@@ -44,7 +46,8 @@ const Settings = ({ onBack }: SettingsProps) => {
         url: 'stun:stun.l.google.com:19302'
       }
     ],
-    offerTTL: 5
+    offerTTL: 5,
+    maxMediaMB: 1024
   });
   const { setIceServers: syncIceServers } = useIceServers();
 
@@ -69,7 +72,8 @@ const Settings = ({ onBack }: SettingsProps) => {
               url: 'stun:stun.l.google.com:19302'
             }
           ],
-          offerTTL: typeof parsedSettings.offerTTL === 'number' ? parsedSettings.offerTTL : 5
+          offerTTL: typeof parsedSettings.offerTTL === 'number' ? parsedSettings.offerTTL : 5,
+          maxMediaMB: typeof parsedSettings.maxMediaMB === 'number' ? Math.max(1, Math.min(16, parsedSettings.maxMediaMB)) : 16
         };
         setSettings(validatedSettings);
       } catch (error) {
@@ -164,6 +168,14 @@ const Settings = ({ onBack }: SettingsProps) => {
     // Синхронизируем с Rust
     const success = await syncIceServers(settings.servers);
     
+    // Применяем системный лимит медиа в Rust
+    const maxMB = settings.maxMediaMB ?? 16;
+    try {
+      await invoke('set_max_media_size_mb', { mb: maxMB });
+    } catch (e) {
+      console.error('Failed to set max media size in Rust', e);
+    }
+
     if (success) {
       console.log('Settings saved and synced with Rust:', settings);
       toast({
@@ -286,6 +298,19 @@ const Settings = ({ onBack }: SettingsProps) => {
 
   const getTTLSliderValue = () => {
     return TTL_VALUES.findIndex(val => val === settings.offerTTL);
+  };
+
+  const handleMaxMediaChange = (value: number[]) => {
+    setSettings(prev => ({
+      ...prev,
+      maxMediaMB: MEDIA_VALUES[value[0]]
+    }));
+  };
+
+  const getMaxMediaSliderValue = () => {
+    const current = settings.maxMediaMB ?? 16;
+    const idx = MEDIA_VALUES.findIndex(val => val === current);
+    return idx >= 0 ? idx : MEDIA_VALUES.length - 1;
   };
 
   const handleVersionClick = () => {
@@ -618,6 +643,48 @@ const Settings = ({ onBack }: SettingsProps) => {
                 <p className="text-center text-slate-300 font-semibold">
                   Текущее время жизни: {settings.offerTTL} мин
                 </p>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Максимальный размер медиа */}
+          <Card className="bg-slate-800/50 border-slate-700">
+            <CardHeader>
+              <CardTitle className="text-white flex items-center">
+                <CloudDownload className="w-5 h-5 mr-2 text-cyan-500" />
+                Максимальный размер медиа
+              </CardTitle>
+              <CardDescription className="text-slate-400">
+                Ограничение на размер отправляемых файлов (шифруются end‑to‑end). Имейте в виду, метаданные файлов (EXIF и т.п.) могут раскрывать сведения об устройстве/авторе.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="space-y-4">
+                <div className="flex justify-between text-sm text-slate-400">
+                  <span>16 МБ</span>
+                  <span>32 МБ</span>
+                  <span>64 МБ</span>
+                  <span>128 МБ</span>
+                  <span>256 МБ</span>
+                  <span>512 МБ</span>
+                  <span>1024 МБ</span>
+                </div>
+
+                <Slider
+                  value={[getMaxMediaSliderValue()]}
+                  onValueChange={handleMaxMediaChange}
+                  max={MEDIA_VALUES.length - 1}
+                  min={0}
+                  step={1}
+                  className="w-full"
+                />
+
+                <p className="text-center text-slate-300 font-semibold">
+                  Максимальный размер: {settings.maxMediaMB} МБ
+                </p>
+              </div>
+              <div className="p-3 bg-yellow-900/30 border border-yellow-600/40 rounded-md text-sm text-yellow-200">
+                Медиа шифруются end-to-end, но содержимое файла может иметь открытые метаданные (например, EXIF у фотографий). При необходимости удаляйте метаданные перед отправкой.
               </div>
             </CardContent>
           </Card>

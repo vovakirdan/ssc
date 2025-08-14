@@ -3,13 +3,14 @@ use crate::logger::log;
 use crate::logger::{emit_disconnected, emit_message, emit_sas_to_ui};
 use crate::peer::crypto::{build_ctx, u64_to_nonce};
 use crate::peer::state::{
-    COLLECTING_CANDIDATES, CRYPTO, DATA_CH, DISCONNECT_TASK, LOCAL_CANDIDATES, MY_PRIV,
-    MY_PUB, PENDING_REMOTE_CANDIDATES, SAS_CONFIRMED, TAG_LEN, WAS_CONNECTED,
+    COLLECTING_CANDIDATES, CRYPTO, DATA_CH, DISCONNECT_TASK, LOCAL_CANDIDATES, MEDIA_BUFFERS,
+    MEDIA_INFO, MY_PRIV, MY_PUB, PENDING_REMOTE_CANDIDATES, SAS_CONFIRMED, TAG_LEN, WAS_CONNECTED,
 };
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use bytes::Bytes;
 use chacha20poly1305::aead::Aead;
+use tauri::Emitter;
 use ring::{agreement, rand as ring_rand};
 use std::sync::Arc;
 use webrtc::data_channel::RTCDataChannel;
@@ -77,7 +78,7 @@ pub fn attach_dc(dc: &Arc<RTCDataChannel>) {
     dc.on_message(Box::new(|msg| {
         log(&format!("Received message, length: {}", msg.data.len()));
 
-        // Пробуем разобрать как строку для обработки PUBKEY сообщений
+        // Пробуем разобрать как строку для обработки PUBKEY/CONTROL сообщений
         if let Ok(text) = std::str::from_utf8(&msg.data) {
             if let Some(rest) = text.strip_prefix("PUBKEY:") {
                 // Декодируем base64
@@ -117,6 +118,93 @@ pub fn attach_dc(dc: &Arc<RTCDataChannel>) {
                     }
                 }
             }
+
+            // Обработка управляющих сообщений медиа
+            if text.starts_with("MEDIA_META:") || text.starts_with("MEDIA_CHUNK:") || text.starts_with("MEDIA_END:") {
+                if !*SAS_CONFIRMED.lock().unwrap() {
+                    log("SAS not confirmed by user, ignoring media control message");
+                    return Box::pin(async {});
+                }
+
+                if text.starts_with("MEDIA_META:") {
+                    let json = &text[11..];
+                    match serde_json::from_str::<crate::commands::util_api::MediaMeta>(json) {
+                        Ok(meta) => {
+                            // Проверка размера
+                            if meta.size > 10 * 1024 * 1024 {
+                                log("Incoming media too large (>10MB), ignoring");
+                                return Box::pin(async {});
+                            }
+                            MEDIA_BUFFERS.lock().unwrap().insert(meta.id.clone(), Vec::with_capacity(meta.size as usize));
+                            MEDIA_INFO.lock().unwrap().insert(meta.id.clone(), (meta.name, meta.mime, meta.size, meta.total_chunks, 0));
+                            log("MEDIA_META stored");
+                        }
+                        Err(e) => log(&format!("Failed to parse MEDIA_META: {:?}", e)),
+                    }
+                    return Box::pin(async {});
+                }
+
+                if text.starts_with("MEDIA_CHUNK:") {
+                    let json = &text[12..];
+                            match serde_json::from_str::<crate::commands::util_api::MediaChunk>(json) {
+                        Ok(chunk) => {
+                            use base64::Engine;
+                            let engine = base64::engine::general_purpose::STANDARD;
+                            match engine.decode(chunk.data.as_bytes()) {
+                                Ok(bytes) => {
+                                            if bytes.len() > 64 * 1024 {
+                                                log("Single MEDIA_CHUNK payload too large (>64KB), dropping");
+                                            } else if let Some(buf) = MEDIA_BUFFERS.lock().unwrap().get_mut(&chunk.id) {
+                                        buf.extend_from_slice(&bytes);
+                                        if let Some(info) = MEDIA_INFO.lock().unwrap().get_mut(&chunk.id) {
+                                            info.4 += 1; // received_chunks
+                                        }
+                                    }
+                                }
+                                Err(e) => log(&format!("Failed to decode MEDIA_CHUNK base64: {:?}", e)),
+                            }
+                        }
+                        Err(e) => log(&format!("Failed to parse MEDIA_CHUNK: {:?}", e)),
+                    }
+                    return Box::pin(async {});
+                }
+
+                if text.starts_with("MEDIA_END:") {
+                    let json = &text[10..];
+                    match serde_json::from_str::<crate::commands::util_api::MediaEnd>(json) {
+                        Ok(end) => {
+                            let buf_opt = MEDIA_BUFFERS.lock().unwrap().remove(&end.id);
+                            let info_opt = MEDIA_INFO.lock().unwrap().remove(&end.id);
+                            if let (Some(bytes), Some((name, mime, size, total_chunks, received_chunks))) = (buf_opt, info_opt) {
+                                if bytes.len() as u64 != size {
+                                    log(&format!("MEDIA size mismatch: expected {}, got {}", size, bytes.len()));
+                                }
+                                if received_chunks != total_chunks {
+                                    log(&format!("MEDIA chunks mismatch: expected {}, got {}", total_chunks, received_chunks));
+                                }
+
+                                // Отправляем событие в UI с base64 полезной нагрузкой
+                                if let Some(app) = crate::peer::state::APP.lock().unwrap().clone() {
+                                    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                                    let payload = serde_json::json!({
+                                        "id": end.id,
+                                        "name": name,
+                                        "mime": mime,
+                                        "size": size,
+                                        "data": b64,
+                                    });
+                                    let _ = app.emit("ssc-media", payload);
+                                }
+                                log("MEDIA_END emitted to UI");
+                            } else {
+                                log("MEDIA_END without buffers/info");
+                            }
+                        }
+                        Err(e) => log(&format!("Failed to parse MEDIA_END: {:?}", e)),
+                    }
+                    return Box::pin(async {});
+                }
+            }
         }
 
         // ----- иначе зашифрованное сообщение -----
@@ -150,7 +238,79 @@ pub fn attach_dc(dc: &Arc<RTCDataChannel>) {
 
                         let plain = String::from_utf8_lossy(&plaintext).to_string();
                         log(&format!("Decrypted message: {}", plain));
-                        emit_message(&plain);
+
+                        // Проверяем управляющие префиксы для медиа
+                        if plain.starts_with("MEDIA_META:") {
+                            let json = &plain[11..];
+                            match serde_json::from_str::<crate::commands::util_api::MediaMeta>(json) {
+                                Ok(meta) => {
+                                    if meta.size > 10 * 1024 * 1024 {
+                                        log("Incoming media too large (>10MB), ignoring");
+                                    } else {
+                                        MEDIA_BUFFERS.lock().unwrap().insert(meta.id.clone(), Vec::with_capacity(meta.size as usize));
+                                        MEDIA_INFO.lock().unwrap().insert(meta.id.clone(), (meta.name, meta.mime, meta.size, meta.total_chunks, 0));
+                                        log("MEDIA_META stored (encrypted)");
+                                    }
+                                }
+                                Err(e) => log(&format!("Failed to parse MEDIA_META (enc): {:?}", e)),
+                            }
+                        } else if plain.starts_with("MEDIA_CHUNK:") {
+                            let json = &plain[12..];
+                            match serde_json::from_str::<crate::commands::util_api::MediaChunk>(json) {
+                                Ok(chunk) => {
+                                    use base64::Engine;
+                                    let engine = base64::engine::general_purpose::STANDARD;
+                                    match engine.decode(chunk.data.as_bytes()) {
+                                        Ok(bytes) => {
+                                            if bytes.len() > 64 * 1024 {
+                                                log("Single MEDIA_CHUNK payload too large (>64KB), dropping (enc)");
+                                            } else if let Some(buf) = MEDIA_BUFFERS.lock().unwrap().get_mut(&chunk.id) {
+                                                buf.extend_from_slice(&bytes);
+                                                if let Some(info) = MEDIA_INFO.lock().unwrap().get_mut(&chunk.id) {
+                                                    info.4 += 1;
+                                                }
+                                            }
+                                        }
+                                        Err(e) => log(&format!("Failed to decode MEDIA_CHUNK base64 (enc): {:?}", e)),
+                                    }
+                                }
+                                Err(e) => log(&format!("Failed to parse MEDIA_CHUNK (enc): {:?}", e)),
+                            }
+                        } else if plain.starts_with("MEDIA_END:") {
+                            let json = &plain[10..];
+                            match serde_json::from_str::<crate::commands::util_api::MediaEnd>(json) {
+                                Ok(end) => {
+                                    let buf_opt = MEDIA_BUFFERS.lock().unwrap().remove(&end.id);
+                                    let info_opt = MEDIA_INFO.lock().unwrap().remove(&end.id);
+                                    if let (Some(bytes), Some((name, mime, size, total_chunks, received_chunks))) = (buf_opt, info_opt) {
+                                        if bytes.len() as u64 != size {
+                                            log(&format!("MEDIA size mismatch: expected {}, got {}", size, bytes.len()));
+                                        }
+                                        if received_chunks != total_chunks {
+                                            log(&format!("MEDIA chunks mismatch: expected {}, got {}", total_chunks, received_chunks));
+                                        }
+                                        if let Some(app) = crate::peer::state::APP.lock().unwrap().clone() {
+                                            let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                                            let payload = serde_json::json!({
+                                                "id": end.id,
+                                                "name": name,
+                                                "mime": mime,
+                                                "size": size,
+                                                "data": b64,
+                                            });
+                                            let _ = app.emit("ssc-media", payload);
+                                        }
+                                        log("MEDIA_END emitted to UI (enc)");
+                                    } else {
+                                        log("MEDIA_END without buffers/info (enc)");
+                                    }
+                                }
+                                Err(e) => log(&format!("Failed to parse MEDIA_END (enc): {:?}", e)),
+                            }
+                        } else {
+                            // Обычный текст
+                            emit_message(&plain);
+                        }
                     } else {
                         log(&format!(
                             "Replay attack detected: received seq {} <= last accepted seq {}",

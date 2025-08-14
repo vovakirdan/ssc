@@ -2,6 +2,7 @@ use crate::peer::crypto::CryptoCtx;
 use crate::peer::types::{IceCandidate, ServerConfig};
 use once_cell::sync::Lazy;
 use ring::agreement;
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::AppHandle;
@@ -51,6 +52,18 @@ pub static COLLECTING_CANDIDATES: Lazy<Mutex<bool>> = Lazy::new(|| Mutex::new(fa
 /// Глобальное хранилище для пользовательских ICE серверов
 pub static USER_ICE_SERVERS: Lazy<Mutex<Option<Vec<ServerConfig>>>> =
     Lazy::new(|| Mutex::new(None));
+
+/// Максимально разрешённый размер медиа (в байтах) — по умолчанию 16 МБ
+pub static MAX_MEDIA_BYTES: Lazy<Mutex<u64>> =
+    Lazy::new(|| Mutex::new(16 * 1024 * 1024));
+
+/// Буферы для приема медиа по id
+pub static MEDIA_BUFFERS: Lazy<Mutex<HashMap<String, Vec<u8>>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
+/// Информация о медиа: (name, mime, size, total_chunks, received_chunks)
+pub static MEDIA_INFO: Lazy<Mutex<HashMap<String, (String, String, u64, u32, u32)>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 
 /// ========== CONSTANTS ==========
 

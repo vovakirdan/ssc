@@ -1,5 +1,5 @@
 import {useState, useEffect, useRef, FormEvent} from 'react';
-import {ArrowLeft, Send, Shield} from 'lucide-react';
+import {ArrowLeft, Send, Shield, Paperclip} from 'lucide-react';
 import {Button} from '@/components/ui/button';
 import {Input} from '@/components/ui/input';
 import {toast} from 'sonner';
@@ -30,6 +30,7 @@ export default function Chat({onBack}: ChatProps) {
   const messagesEndRef                        = useRef<HTMLDivElement>(null);
   const clearHistoryTimeoutRef                = useRef<NodeJS.Timeout | null>(null);
   const unlistenersRef                        = useRef<UnlistenFn[]>([]);
+  const [isDragging, setIsDragging]           = useState(false);
 
   /* ---------- helpers ---------- */
   const scrollToBottom = () =>
@@ -120,6 +121,22 @@ export default function Chat({onBack}: ChatProps) {
         
         setMessages((prev) => [...prev, ...incomingMessages]);
       }
+    });
+
+    // Событие получения медиа
+    register('ssc-media', (e) => {
+      const payload = e.payload as { id: string; name: string; mime: string; size: number; data: string };
+      const dataUrl = `data:${payload.mime};base64,${payload.data}`;
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: payload.id,
+          text: '',
+          timestamp: new Date(),
+          isOwn: false,
+          media: { id: payload.id, name: payload.name, mime: payload.mime, size: payload.size, dataUrl }
+        }
+      ]);
     });
 
     register('ssc-connected', () => {
@@ -306,6 +323,146 @@ export default function Chat({onBack}: ChatProps) {
     }
   };
 
+  // Отправка файла (до 10 МБ) с разбиением на чанки и прогрессом
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const handlePickFile = () => fileInputRef.current?.click();
+  // Функция отправки одного файла
+  const sendFile = async (file: File) => {
+    // Читаем лимит из настроек (localStorage), но не больше 10 МБ
+    const savedSettings = localStorage.getItem('ssc-settings');
+    let maxMB = 16; // дефолт синхронизирован с Rust
+    if (savedSettings) {
+      try {
+        const parsed = JSON.parse(savedSettings);
+        if (typeof parsed.maxMediaMB === 'number') maxMB = Math.max(1, Math.min(1024, parsed.maxMediaMB));
+      } catch {}
+    }
+    const MAX_BYTES = maxMB * 1024 * 1024;
+
+    if (file.size > MAX_BYTES) {
+      toast.error(`Файл превышает ${maxMB} МБ`);
+      return;
+    }
+    if (status !== 'connected') {
+      toast.error('Нет подключения');
+      return;
+    }
+
+    const id = `${Date.now()}-${file.name}`;
+    const chunkSize = 8 * 1024; // 8KB — безопаснее для DataChannel
+    const totalChunks = Math.ceil(file.size / chunkSize);
+
+    // Добавляем локальное сообщение с прогрессом
+    setMessages((p) => [
+      ...p,
+      {
+        id,
+        text: '',
+        timestamp: new Date(),
+        isOwn: true,
+        media: { id, name: file.name, mime: file.type || 'application/octet-stream', size: file.size, progress: 0 },
+      },
+    ]);
+
+    // Предпросмотр: читаем файл в data URL параллельно и обновляем локальное сообщение
+    try {
+      const previewUrl = await new Promise<string>((resolve) => {
+        const fr = new FileReader();
+        fr.onload = () => resolve(fr.result as string);
+        fr.readAsDataURL(file);
+      });
+      setMessages((p) => p.map((m) =>
+        m.id === id && m.media ? { ...m, media: { ...m.media, dataUrl: previewUrl } } : m
+      ));
+    } catch (e) {
+      console.error('preview generate error', e);
+    }
+
+    try {
+      // Отправляем метаданные
+      const okMeta = await invoke<boolean>('send_media_start', {
+        id,
+        name: file.name,
+        mime: file.type || 'application/octet-stream',
+        size: file.size,
+        total_chunks: totalChunks,
+      });
+      if (!okMeta) throw new Error('send_media_start failed');
+
+      // Читаем и отправляем чанки по очереди (совместимо с WebView без File.stream())
+      let index = 0;
+      let sentBytes = 0;
+      const toBase64 = (ab: ArrayBuffer) => {
+        const bytes = new Uint8Array(ab);
+        let binary = '';
+        const step = 8192;
+        for (let i = 0; i < bytes.length; i += step) {
+          const sub = bytes.subarray(i, Math.min(i + step, bytes.length));
+          let chunkStr = '';
+          for (let j = 0; j < sub.length; j++) chunkStr += String.fromCharCode(sub[j]);
+          binary += chunkStr;
+        }
+        return btoa(binary);
+      };
+
+      for (let offset = 0; offset < file.size; offset += chunkSize) {
+        const end = Math.min(offset + chunkSize, file.size);
+        const blob = file.slice(offset, end);
+        const ab = await blob.arrayBuffer();
+        const b64 = toBase64(ab);
+        const okChunk = await invoke<boolean>('send_media_chunk', { id, index, data: b64 });
+        if (!okChunk) throw new Error(`send_media_chunk failed for ${index}`);
+        index++;
+        sentBytes = end;
+        setMessages((p) => p.map((m) =>
+          m.id === id && m.media ? { ...m, media: { ...m.media, progress: Math.min(1, sentBytes / file.size) } } : m
+        ));
+        await new Promise((r) => setTimeout(r, 5));
+      }
+
+      const okEnd = await invoke<boolean>('send_media_end', { id });
+      if (!okEnd) throw new Error('send_media_end failed');
+
+      // Устанавливаем финальный прогресс
+      setMessages((p) => p.map((m) =>
+        m.id === id && m.media ? { ...m, media: { ...m.media, progress: 1 } } : m
+      ));
+    } catch (err) {
+      console.error('media send error', err);
+      toast.error('Не удалось отправить файл');
+      setMessages((p) => p.filter((m) => m.id !== id));
+    }
+  };
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    e.target.value = '';
+    for (const file of Array.from(files)) {
+      await sendFile(file);
+    }
+  };
+
+  // Drag & Drop
+  const onDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    if (!isDragging) setIsDragging(true);
+  };
+  const onDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+  };
+  const onDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    const files = e.dataTransfer.files;
+    if (files && files.length > 0) {
+      for (const f of Array.from(files)) {
+        await sendFile(f);
+      }
+    }
+  };
+
   /* ---------- UI ---------- */
   const {width} = useWindowSize(); // simple mobile check
   const isMobile = width < 640;
@@ -390,7 +547,12 @@ export default function Chat({onBack}: ChatProps) {
       )}
 
       {/* Messages - скроллируемая область */}
-      <main className="flex-1 overflow-y-auto p-4 min-h-0">
+      <main 
+        className="flex-1 overflow-y-auto p-4 min-h-0 relative"
+        onDragOver={onDragOver}
+        onDragLeave={onDragLeave}
+        onDrop={onDrop}
+      >
         <div className="max-w-4xl mx-auto space-y-2 w-full">
           <AnimatePresence mode="popLayout">
             {messages.length === 0 ? (
@@ -412,16 +574,24 @@ export default function Chat({onBack}: ChatProps) {
               </motion.div>
             ) : (
               messages.map((m, index) => (
-                <MessageBubble 
-                  key={m.id} 
-                  msg={m} 
-                  index={index}
-                />
+                <motion.div key={m.id} layout>
+                  <MessageBubble 
+                    msg={m} 
+                    index={index}
+                  />
+                </motion.div>
               ))
             )}
           </AnimatePresence>
           <div ref={messagesEndRef} />
         </div>
+        {isDragging && (
+          <div className="absolute inset-0 bg-slate-900/70 backdrop-blur-sm flex items-center justify-center pointer-events-none">
+            <div className="text-slate-200 border border-dashed border-slate-500 rounded-lg p-6">
+              Перетащите файл сюда для отправки
+            </div>
+          </div>
+        )}
       </main>
 
       {/* Input - фиксированное поле ввода */}
@@ -457,6 +627,16 @@ export default function Chat({onBack}: ChatProps) {
             )}
           </div>
 
+          <input type="file" ref={fileInputRef} className="hidden" onChange={handleFileChange} />
+          <Button
+            type="button"
+            onClick={handlePickFile}
+            disabled={status !== 'connected'}
+            className="bg-slate-600 hover:bg-slate-700"
+            title="Отправить файл (до 10 МБ)"
+          >
+            <Paperclip className="w-4 h-4" />
+          </Button>
           <Button
             type="submit"
             disabled={sending || !newMessage.trim() || status !== 'connected'}

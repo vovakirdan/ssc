@@ -2,6 +2,7 @@ import {motion} from 'framer-motion';
 import {Card} from '@/components/ui/card';
 import type {FC} from 'react';
 import type {Message} from '@/components/chat/types';
+import { MediaBubble } from '@/components/chat/MediaBubble';
 
 interface Props {
   msg: Message;
@@ -69,7 +70,11 @@ export const MessageBubble: FC<Props> = ({msg, index = 0}) => {
             : 'bg-slate-700 text-white border-slate-600'
         }`}
       >
-        <p className="text-sm break-words">{msg.text}</p>
+        {msg.media ? (
+          <MediaBubble media={msg.media} isOwn={msg.isOwn} />
+        ) : (
+          <p className="text-sm break-words">{msg.text}</p>
+        )}
         
         {/* Показываем информацию о части сообщения */}
         {isPartOfGroup && (
