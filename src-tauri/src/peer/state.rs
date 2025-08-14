@@ -53,6 +53,10 @@ pub static COLLECTING_CANDIDATES: Lazy<Mutex<bool>> = Lazy::new(|| Mutex::new(fa
 pub static USER_ICE_SERVERS: Lazy<Mutex<Option<Vec<ServerConfig>>>> =
     Lazy::new(|| Mutex::new(None));
 
+/// Максимально разрешённый размер медиа (в байтах) — по умолчанию 16 МБ
+pub static MAX_MEDIA_BYTES: Lazy<Mutex<u64>> =
+    Lazy::new(|| Mutex::new(16 * 1024 * 1024));
+
 /// Буферы для приема медиа по id
 pub static MEDIA_BUFFERS: Lazy<Mutex<HashMap<String, Vec<u8>>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));

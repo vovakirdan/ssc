@@ -34,6 +34,7 @@ pub fn run() {
             commands::util_api::confirm_sas,
             commands::util_api::reject_sas,
             commands::util_api::get_sas_status,
+            commands::util_api::set_max_media_size_mb,
             peer::ice::check_ice_server_availability,
             peer::connection::set_ice_servers,
             peer::connection::get_ice_servers,

@@ -2,15 +2,15 @@ use crate::logger::emit_disconnected;
 use crate::logger::log;
 use crate::peer::crypto::u64_to_nonce;
 use crate::peer::state::{
-    COLLECTING_CANDIDATES, CRYPTO, DATA_CH, DISCONNECT_TASK, LOCAL_CANDIDATES, MY_PRIV, MY_PUB,
-    PEER, PENDING_REMOTE_CANDIDATES, SAS_CONFIRMED, WAS_CONNECTED,
+    COLLECTING_CANDIDATES, CRYPTO, DATA_CH, DISCONNECT_TASK, LOCAL_CANDIDATES, MAX_MEDIA_BYTES,
+    MY_PRIV, MY_PUB, PEER, PENDING_REMOTE_CANDIDATES, SAS_CONFIRMED, WAS_CONNECTED,
 };
 use bytes::Bytes;
 use chacha20poly1305::aead::Aead;
 use tauri::command;
 
-/// Максимальный размер медиа (в байтах)
-const MAX_MEDIA_BYTES: u64 = 10 * 1024 * 1024; // 10MB
+/// Верхняя системная граница (safety cap), чтобы не дать выставить чрезмерные значения
+const MAX_MEDIA_BYTES_CAP: u64 = 1024 * 1024 * 1024; // 1GB
 
 /// текст по каналу
 #[command]
@@ -162,7 +162,8 @@ pub async fn send_media_start(id: String, name: String, mime: String, size: u64,
         id, name, mime, size, total_chunks
     ));
 
-    if size > MAX_MEDIA_BYTES {
+    let max_allowed = *MAX_MEDIA_BYTES.lock().unwrap();
+    if size > max_allowed {
         log("Media exceeds MAX_MEDIA_BYTES, rejecting");
         return false;
     }
@@ -213,6 +214,16 @@ pub async fn send_media_end(id: String) -> bool {
     };
     let payload = format!("MEDIA_END:{}", json);
     send_control_message(payload).await
+}
+
+/// Установка максимального размера медиа (в мегабайтах). Применяется немедленно.
+#[command]
+pub fn set_max_media_size_mb(mb: u64) -> bool {
+    let clamped_mb = mb.clamp(1, MAX_MEDIA_BYTES_CAP / (1024 * 1024));
+    let bytes = clamped_mb * 1024 * 1024;
+    *MAX_MEDIA_BYTES.lock().unwrap() = bytes;
+    log(&format!("set_max_media_size_mb: {} MB ({} bytes)", clamped_mb, bytes));
+    true
 }
 
 /// подтверждение SAS пользователем

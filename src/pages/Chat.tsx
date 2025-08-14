@@ -30,6 +30,7 @@ export default function Chat({onBack}: ChatProps) {
   const messagesEndRef                        = useRef<HTMLDivElement>(null);
   const clearHistoryTimeoutRef                = useRef<NodeJS.Timeout | null>(null);
   const unlistenersRef                        = useRef<UnlistenFn[]>([]);
+  const [isDragging, setIsDragging]           = useState(false);
 
   /* ---------- helpers ---------- */
   const scrollToBottom = () =>
@@ -325,14 +326,21 @@ export default function Chat({onBack}: ChatProps) {
   // Отправка файла (до 10 МБ) с разбиением на чанки и прогрессом
   const fileInputRef = useRef<HTMLInputElement>(null);
   const handlePickFile = () => fileInputRef.current?.click();
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    e.target.value = '';
+  // Функция отправки одного файла
+  const sendFile = async (file: File) => {
+    // Читаем лимит из настроек (localStorage), но не больше 10 МБ
+    const savedSettings = localStorage.getItem('ssc-settings');
+    let maxMB = 10;
+    if (savedSettings) {
+      try {
+        const parsed = JSON.parse(savedSettings);
+        if (typeof parsed.maxMediaMB === 'number') maxMB = Math.max(1, Math.min(10, parsed.maxMediaMB));
+      } catch {}
+    }
+    const MAX_BYTES = maxMB * 1024 * 1024;
 
-    const MAX_BYTES = 10 * 1024 * 1024;
     if (file.size > MAX_BYTES) {
-      toast.error('Файл превышает 10 МБ');
+      toast.error(`Файл превышает ${maxMB} МБ`);
       return;
     }
     if (status !== 'connected') {
@@ -387,7 +395,6 @@ export default function Chat({onBack}: ChatProps) {
       const toBase64 = (ab: ArrayBuffer) => {
         const bytes = new Uint8Array(ab);
         let binary = '';
-        // Небольшие порции, чтобы не упереться в лимиты аргументов/стека
         const step = 8192;
         for (let i = 0; i < bytes.length; i += step) {
           const sub = bytes.subarray(i, Math.min(i + step, bytes.length));
@@ -410,32 +417,49 @@ export default function Chat({onBack}: ChatProps) {
         setMessages((p) => p.map((m) =>
           m.id === id && m.media ? { ...m, media: { ...m.media, progress: Math.min(1, sentBytes / file.size) } } : m
         ));
-        // Мелкая задержка, чтобы не забить буфер
         await new Promise((r) => setTimeout(r, 5));
       }
 
       const okEnd = await invoke<boolean>('send_media_end', { id });
       if (!okEnd) throw new Error('send_media_end failed');
 
-      // Для изображений – формируем data URL локально для предпросмотра
-      if (file.type.startsWith('image/')) {
-        const dataUrl = await new Promise<string>((resolve) => {
-          const fr = new FileReader();
-          fr.onload = () => resolve(fr.result as string);
-          fr.readAsDataURL(file);
-        });
-        setMessages((p) => p.map((m) =>
-          m.id === id && m.media ? { ...m, media: { ...m.media, dataUrl, progress: 1 } } : m
-        ));
-      } else {
-        setMessages((p) => p.map((m) =>
-          m.id === id && m.media ? { ...m, media: { ...m.media, progress: 1 } } : m
-        ));
-      }
+      // Устанавливаем финальный прогресс
+      setMessages((p) => p.map((m) =>
+        m.id === id && m.media ? { ...m, media: { ...m.media, progress: 1 } } : m
+      ));
     } catch (err) {
       console.error('media send error', err);
       toast.error('Не удалось отправить файл');
       setMessages((p) => p.filter((m) => m.id !== id));
+    }
+  };
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    e.target.value = '';
+    for (const file of Array.from(files)) {
+      await sendFile(file);
+    }
+  };
+
+  // Drag & Drop
+  const onDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    if (!isDragging) setIsDragging(true);
+  };
+  const onDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+  };
+  const onDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    const files = e.dataTransfer.files;
+    if (files && files.length > 0) {
+      for (const f of Array.from(files)) {
+        await sendFile(f);
+      }
     }
   };
 
@@ -523,7 +547,12 @@ export default function Chat({onBack}: ChatProps) {
       )}
 
       {/* Messages - скроллируемая область */}
-      <main className="flex-1 overflow-y-auto p-4 min-h-0">
+      <main 
+        className="flex-1 overflow-y-auto p-4 min-h-0 relative"
+        onDragOver={onDragOver}
+        onDragLeave={onDragLeave}
+        onDrop={onDrop}
+      >
         <div className="max-w-4xl mx-auto space-y-2 w-full">
           <AnimatePresence mode="popLayout">
             {messages.length === 0 ? (
@@ -556,6 +585,13 @@ export default function Chat({onBack}: ChatProps) {
           </AnimatePresence>
           <div ref={messagesEndRef} />
         </div>
+        {isDragging && (
+          <div className="absolute inset-0 bg-slate-900/70 backdrop-blur-sm flex items-center justify-center pointer-events-none">
+            <div className="text-slate-200 border border-dashed border-slate-500 rounded-lg p-6">
+              Перетащите файл сюда для отправки
+            </div>
+          </div>
+        )}
       </main>
 
       {/* Input - фиксированное поле ввода */}
