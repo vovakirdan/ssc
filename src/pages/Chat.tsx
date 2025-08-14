@@ -1,5 +1,5 @@
 import {useState, useEffect, useRef, FormEvent} from 'react';
-import {ArrowLeft, Send, Shield} from 'lucide-react';
+import {ArrowLeft, Send, Shield, Paperclip} from 'lucide-react';
 import {Button} from '@/components/ui/button';
 import {Input} from '@/components/ui/input';
 import {toast} from 'sonner';
@@ -120,6 +120,22 @@ export default function Chat({onBack}: ChatProps) {
         
         setMessages((prev) => [...prev, ...incomingMessages]);
       }
+    });
+
+    // Событие получения медиа
+    register('ssc-media', (e) => {
+      const payload = e.payload as { id: string; name: string; mime: string; size: number; data: string };
+      const dataUrl = `data:${payload.mime};base64,${payload.data}`;
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: payload.id,
+          text: '',
+          timestamp: new Date(),
+          isOwn: false,
+          media: { id: payload.id, name: payload.name, mime: payload.mime, size: payload.size, dataUrl }
+        }
+      ]);
     });
 
     register('ssc-connected', () => {
@@ -306,6 +322,97 @@ export default function Chat({onBack}: ChatProps) {
     }
   };
 
+  // Отправка файла (до 10 МБ) с разбиением на чанки и прогрессом
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const handlePickFile = () => fileInputRef.current?.click();
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = '';
+
+    const MAX_BYTES = 10 * 1024 * 1024;
+    if (file.size > MAX_BYTES) {
+      toast.error('Файл превышает 10 МБ');
+      return;
+    }
+    if (status !== 'connected') {
+      toast.error('Нет подключения');
+      return;
+    }
+
+    const id = `${Date.now()}-${file.name}`;
+    const chunkSize = 64 * 1024; // 64KB
+    const totalChunks = Math.ceil(file.size / chunkSize);
+
+    // Добавляем локальное сообщение с прогрессом
+    setMessages((p) => [
+      ...p,
+      {
+        id,
+        text: '',
+        timestamp: new Date(),
+        isOwn: true,
+        media: { id, name: file.name, mime: file.type || 'application/octet-stream', size: file.size, progress: 0 },
+      },
+    ]);
+
+    try {
+      // Отправляем метаданные
+      const okMeta = await invoke<boolean>('send_media_start', {
+        id,
+        name: file.name,
+        mime: file.type || 'application/octet-stream',
+        size: file.size,
+        totalChunks,
+      });
+      if (!okMeta) throw new Error('send_media_start failed');
+
+      // Читаем и отправляем чанки по очереди
+      const reader = file.stream().getReader();
+      let index = 0;
+      let sentBytes = 0;
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        if (value) {
+          sentBytes += value.byteLength;
+          const b64 = btoa(String.fromCharCode(...Array.from(new Uint8Array(value))));
+          const okChunk = await invoke<boolean>('send_media_chunk', { id, index, data: b64 });
+          if (!okChunk) throw new Error(`send_media_chunk failed for ${index}`);
+          index++;
+          setMessages((p) => p.map((m) =>
+            m.id === id && m.media ? { ...m, media: { ...m.media, progress: Math.min(1, sentBytes / file.size) } } : m
+          ));
+          // Мелкая задержка, чтобы не забить буфер
+          await new Promise((r) => setTimeout(r, 5));
+        }
+      }
+
+      const okEnd = await invoke<boolean>('send_media_end', { id });
+      if (!okEnd) throw new Error('send_media_end failed');
+
+      // Для изображений – формируем data URL локально для предпросмотра
+      if (file.type.startsWith('image/')) {
+        const dataUrl = await new Promise<string>((resolve) => {
+          const fr = new FileReader();
+          fr.onload = () => resolve(fr.result as string);
+          fr.readAsDataURL(file);
+        });
+        setMessages((p) => p.map((m) =>
+          m.id === id && m.media ? { ...m, media: { ...m.media, dataUrl, progress: 1 } } : m
+        ));
+      } else {
+        setMessages((p) => p.map((m) =>
+          m.id === id && m.media ? { ...m, media: { ...m.media, progress: 1 } } : m
+        ));
+      }
+    } catch (err) {
+      console.error('media send error', err);
+      toast.error('Не удалось отправить файл');
+      setMessages((p) => p.filter((m) => m.id !== id));
+    }
+  };
+
   /* ---------- UI ---------- */
   const {width} = useWindowSize(); // simple mobile check
   const isMobile = width < 640;
@@ -457,6 +564,16 @@ export default function Chat({onBack}: ChatProps) {
             )}
           </div>
 
+          <input type="file" ref={fileInputRef} className="hidden" onChange={handleFileChange} />
+          <Button
+            type="button"
+            onClick={handlePickFile}
+            disabled={status !== 'connected'}
+            className="bg-slate-600 hover:bg-slate-700"
+            title="Отправить файл (до 10 МБ)"
+          >
+            <Paperclip className="w-4 h-4" />
+          </Button>
           <Button
             type="submit"
             disabled={sending || !newMessage.trim() || status !== 'connected'}

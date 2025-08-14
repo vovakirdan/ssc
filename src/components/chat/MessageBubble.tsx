@@ -69,7 +69,23 @@ export const MessageBubble: FC<Props> = ({msg, index = 0}) => {
             : 'bg-slate-700 text-white border-slate-600'
         }`}
       >
-        <p className="text-sm break-words">{msg.text}</p>
+        {msg.media ? (
+          <div className="space-y-2">
+            <p className="text-xs opacity-90">{msg.media.name}</p>
+            {msg.media.mime.startsWith('image/') && msg.media.dataUrl ? (
+              <img src={msg.media.dataUrl} alt={msg.media.name} className="max-h-64 rounded" />
+            ) : msg.media.dataUrl ? (
+              <a href={msg.media.dataUrl} download={msg.media.name} className="underline">Скачать файл</a>
+            ) : (
+              <p className="text-sm">Получение файла…</p>
+            )}
+            {typeof msg.media.progress === 'number' && msg.media.progress < 1 && (
+              <p className="text-xs">Загрузка: {Math.round(msg.media.progress * 100)}%</p>
+            )}
+          </div>
+        ) : (
+          <p className="text-sm break-words">{msg.text}</p>
+        )}
         
         {/* Показываем информацию о части сообщения */}
         {isPartOfGroup && (

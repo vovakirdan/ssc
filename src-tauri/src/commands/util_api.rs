@@ -9,6 +9,9 @@ use bytes::Bytes;
 use chacha20poly1305::aead::Aead;
 use tauri::command;
 
+/// Максимальный размер медиа (в байтах)
+const MAX_MEDIA_BYTES: u64 = 10 * 1024 * 1024; // 10MB
+
 /// текст по каналу
 #[command]
 pub async fn send_text(text: String) -> bool {
@@ -68,6 +71,148 @@ pub async fn send_text(text: String) -> bool {
     }
     log("No data channel available for sending");
     false
+}
+
+/// Метаданные начала передачи медиа
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+pub struct MediaMeta {
+    pub id: String,
+    pub name: String,
+    pub mime: String,
+    pub size: u64,
+    pub total_chunks: u32,
+}
+
+/// Чанк медиа-данных
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+pub struct MediaChunk {
+    pub id: String,
+    pub index: u32,
+    pub data: String, // base64-часть
+}
+
+/// Завершение передачи медиа
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+pub struct MediaEnd {
+    pub id: String,
+}
+
+/// отправка управляющего сообщения в data-channel (общий помощник)
+async fn send_control_message(payload: String) -> bool {
+    // Проверяем, подтвержден ли SAS пользователем
+    let sas_confirmed = *SAS_CONFIRMED.lock().unwrap();
+    let crypto_exists = CRYPTO.lock().unwrap().is_some();
+    let data_ch_exists = DATA_CH.lock().unwrap().is_some();
+
+    log(&format!(
+        "send_control_message state check: sas_confirmed={}, crypto_exists={}, data_ch_exists={}",
+        sas_confirmed, crypto_exists, data_ch_exists
+    ));
+
+    if !sas_confirmed {
+        log("SAS not confirmed by user, not sending control message");
+        return false;
+    }
+
+    let dc = { DATA_CH.lock().unwrap().as_ref().cloned() };
+    if let Some(dc) = dc {
+        let result = {
+            let mut crypto_guard = CRYPTO.lock().unwrap();
+            if let Some(ref mut ctx) = *crypto_guard {
+                let seq_num = ctx.send_n;
+                let nonce = u64_to_nonce(seq_num);
+                ctx.send_n += 1;
+
+                let plaintext = payload.into_bytes();
+                match ctx.sealing.encrypt(&nonce, plaintext.as_ref()) {
+                    Ok(ciphertext) => {
+                        log(&format!(
+                            "Encrypted control message with seq {}, length: {}",
+                            seq_num,
+                            ciphertext.len()
+                        ));
+                        Some(ciphertext)
+                    }
+                    Err(_) => {
+                        log("Encryption failed (control)");
+                        None
+                    }
+                }
+            } else {
+                log("No crypto context available for sending (control)");
+                None
+            }
+        };
+
+        if let Some(ciphertext) = result {
+            let send_result = dc.send(&bytes::Bytes::from(ciphertext)).await.is_ok();
+            log(&format!("Send result (control): {}", send_result));
+            return send_result;
+        }
+    }
+    log("No data channel available for sending (control)");
+    false
+}
+
+/// начало передачи медиа: отправляет метаданные
+#[command]
+pub async fn send_media_start(id: String, name: String, mime: String, size: u64, total_chunks: u32) -> bool {
+    log(&format!(
+        "send_media_start id={} name={} mime={} size={} total_chunks={}",
+        id, name, mime, size, total_chunks
+    ));
+
+    if size > MAX_MEDIA_BYTES {
+        log("Media exceeds MAX_MEDIA_BYTES, rejecting");
+        return false;
+    }
+
+    let meta = MediaMeta { id, name, mime, size, total_chunks };
+    let json = match serde_json::to_string(&meta) {
+        Ok(s) => s,
+        Err(e) => {
+            log(&format!("Failed to serialize MediaMeta: {:?}", e));
+            return false;
+        }
+    };
+    let payload = format!("MEDIA_META:{}", json);
+    send_control_message(payload).await
+}
+
+/// отправка чанка медиа (base64)
+#[command]
+pub async fn send_media_chunk(id: String, index: u32, data: String) -> bool {
+    // Простейшая защита от слишком больших чанков, чтобы не переполнить буфер
+    if data.len() > 128 * 1024 { // ~128KB символов base64
+        log("Media chunk too large (>128KB base64), rejecting");
+        return false;
+    }
+
+    let chunk = MediaChunk { id, index, data };
+    let json = match serde_json::to_string(&chunk) {
+        Ok(s) => s,
+        Err(e) => {
+            log(&format!("Failed to serialize MediaChunk: {:?}", e));
+            return false;
+        }
+    };
+    let payload = format!("MEDIA_CHUNK:{}", json);
+    send_control_message(payload).await
+}
+
+/// завершение передачи медиа
+#[command]
+pub async fn send_media_end(id: String) -> bool {
+    let end = MediaEnd { id };
+    let json = match serde_json::to_string(&end) {
+        Ok(s) => s,
+        Err(e) => {
+            log(&format!("Failed to serialize MediaEnd: {:?}", e));
+            return false;
+        }
+    };
+    let payload = format!("MEDIA_END:{}", json);
+    send_control_message(payload).await
 }
 
 /// подтверждение SAS пользователем

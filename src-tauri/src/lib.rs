@@ -25,6 +25,9 @@ pub fn run() {
             peer::ice::add_ice_candidate,
             // Utility functions
             commands::util_api::send_text,
+            commands::util_api::send_media_start,
+            commands::util_api::send_media_chunk,
+            commands::util_api::send_media_end,
             commands::util_api::get_fingerprint,
             commands::util_api::is_connected,
             commands::util_api::disconnect,
