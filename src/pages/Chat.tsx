@@ -90,6 +90,14 @@ export default function Chat({onBack}: ChatProps) {
       listen(event, cb).then((un) => unlistenersRef.current.push(un));
     };
 
+    // Автоподтверждение SAS при его получении, чтобы разблокировать отправку медиа/текста
+    register('ssc-sas', () => {
+      console.log('Auto-confirming SAS on ssc-sas event');
+      invoke<boolean>('confirm_sas').catch((e) => {
+        console.error('confirm_sas error', e);
+      });
+    });
+
     register('ssc-message', (e) => {
       const txt = (e.payload as any).text ?? e.payload;
       
@@ -328,6 +336,7 @@ export default function Chat({onBack}: ChatProps) {
   const handlePickFile = () => fileInputRef.current?.click();
   // Функция отправки одного файла
   const sendFile = async (file: File) => {
+    console.log('[media] sendFile called', { name: file.name, size: file.size, type: file.type });
     // Читаем лимит из настроек (localStorage), но не больше 10 МБ
     const savedSettings = localStorage.getItem('ssc-settings');
     let maxMB = 16; // дефолт синхронизирован с Rust
@@ -341,10 +350,12 @@ export default function Chat({onBack}: ChatProps) {
 
     if (file.size > MAX_BYTES) {
       toast.error(`Файл превышает ${maxMB} МБ`);
+      console.warn('[media] file too large', { size: file.size, MAX_BYTES });
       return;
     }
     if (status !== 'connected') {
       toast.error('Нет подключения');
+      console.warn('[media] not connected, status=', status);
       return;
     }
 
@@ -379,14 +390,16 @@ export default function Chat({onBack}: ChatProps) {
     }
 
     try {
+      console.log('[media] invoking send_media_start', { id, name: file.name, size: file.size, totalChunks: totalChunks });
       // Отправляем метаданные
       const okMeta = await invoke<boolean>('send_media_start', {
         id,
         name: file.name,
         mime: file.type || 'application/octet-stream',
         size: file.size,
-        total_chunks: totalChunks,
+        totalChunks: totalChunks,
       });
+      console.log('[media] send_media_start result', okMeta);
       if (!okMeta) throw new Error('send_media_start failed');
 
       // Читаем и отправляем чанки по очереди (совместимо с WebView без File.stream())
@@ -421,6 +434,7 @@ export default function Chat({onBack}: ChatProps) {
       }
 
       const okEnd = await invoke<boolean>('send_media_end', { id });
+      console.log('[media] send_media_end result', okEnd);
       if (!okEnd) throw new Error('send_media_end failed');
 
       // Устанавливаем финальный прогресс
@@ -436,9 +450,13 @@ export default function Chat({onBack}: ChatProps) {
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
+    console.log('[media] file input change', { count: files?.length });
     if (!files || files.length === 0) return;
+    // ВАЖНО: создаем снимок массива ДО очистки value, иначе FileList может стать пустым
+    const fileArray = Array.from(files);
+    console.log('[media] snapshot fileArray', { count: fileArray.length });
     e.target.value = '';
-    for (const file of Array.from(files)) {
+    for (const file of fileArray) {
       await sendFile(file);
     }
   };
@@ -456,6 +474,7 @@ export default function Chat({onBack}: ChatProps) {
     e.preventDefault();
     setIsDragging(false);
     const files = e.dataTransfer.files;
+    console.log('[media] drop files', { count: files?.length });
     if (files && files.length > 0) {
       for (const f of Array.from(files)) {
         await sendFile(f);

@@ -4,7 +4,7 @@ use crate::logger::{emit_disconnected, emit_message, emit_sas_to_ui};
 use crate::peer::crypto::{build_ctx, u64_to_nonce};
 use crate::peer::state::{
     COLLECTING_CANDIDATES, CRYPTO, DATA_CH, DISCONNECT_TASK, LOCAL_CANDIDATES, MEDIA_BUFFERS,
-    MEDIA_INFO, MY_PRIV, MY_PUB, PENDING_REMOTE_CANDIDATES, SAS_CONFIRMED, TAG_LEN, WAS_CONNECTED,
+    MEDIA_INFO, MAX_MEDIA_BYTES, MY_PRIV, MY_PUB, PENDING_REMOTE_CANDIDATES, SAS_CONFIRMED, TAG_LEN, WAS_CONNECTED,
 };
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
@@ -130,9 +130,10 @@ pub fn attach_dc(dc: &Arc<RTCDataChannel>) {
                     let json = &text[11..];
                     match serde_json::from_str::<crate::commands::util_api::MediaMeta>(json) {
                         Ok(meta) => {
-                            // Проверка размера
-                            if meta.size > 10 * 1024 * 1024 {
-                                log("Incoming media too large (>10MB), ignoring");
+                            // Проверка размера по текущему лимиту
+                            let max_allowed = *MAX_MEDIA_BYTES.lock().unwrap();
+                            if meta.size > max_allowed {
+                                log(&format!("Incoming media too large (>{} bytes), ignoring", max_allowed));
                                 return Box::pin(async {});
                             }
                             MEDIA_BUFFERS.lock().unwrap().insert(meta.id.clone(), Vec::with_capacity(meta.size as usize));
@@ -244,8 +245,9 @@ pub fn attach_dc(dc: &Arc<RTCDataChannel>) {
                             let json = &plain[11..];
                             match serde_json::from_str::<crate::commands::util_api::MediaMeta>(json) {
                                 Ok(meta) => {
-                                    if meta.size > 10 * 1024 * 1024 {
-                                        log("Incoming media too large (>10MB), ignoring");
+                                    let max_allowed = *MAX_MEDIA_BYTES.lock().unwrap();
+                                    if meta.size > max_allowed {
+                                        log(&format!("Incoming media too large (>{} bytes), ignoring", max_allowed));
                                     } else {
                                         MEDIA_BUFFERS.lock().unwrap().insert(meta.id.clone(), Vec::with_capacity(meta.size as usize));
                                         MEDIA_INFO.lock().unwrap().insert(meta.id.clone(), (meta.name, meta.mime, meta.size, meta.total_chunks, 0));
