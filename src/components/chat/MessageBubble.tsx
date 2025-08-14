@@ -2,6 +2,7 @@ import {motion} from 'framer-motion';
 import {Card} from '@/components/ui/card';
 import type {FC} from 'react';
 import type {Message} from '@/components/chat/types';
+import { MediaBubble } from '@/components/chat/MediaBubble';
 
 interface Props {
   msg: Message;
@@ -70,19 +71,7 @@ export const MessageBubble: FC<Props> = ({msg, index = 0}) => {
         }`}
       >
         {msg.media ? (
-          <div className="space-y-2">
-            <p className="text-xs opacity-90">{msg.media.name}</p>
-            {msg.media.mime.startsWith('image/') && msg.media.dataUrl ? (
-              <img src={msg.media.dataUrl} alt={msg.media.name} className="max-h-64 rounded" />
-            ) : msg.media.dataUrl ? (
-              <a href={msg.media.dataUrl} download={msg.media.name} className="underline">Скачать файл</a>
-            ) : (
-              <p className="text-sm">Получение файла…</p>
-            )}
-            {typeof msg.media.progress === 'number' && msg.media.progress < 1 && (
-              <p className="text-xs">Загрузка: {Math.round(msg.media.progress * 100)}%</p>
-            )}
-          </div>
+          <MediaBubble media={msg.media} isOwn={msg.isOwn} />
         ) : (
           <p className="text-sm break-words">{msg.text}</p>
         )}
