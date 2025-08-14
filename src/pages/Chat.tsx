@@ -285,7 +285,7 @@ export default function Chat({onBack}: ChatProps) {
     try {
       // Отправляем каждую часть отдельно
       for (let i = 0; i < messageParts.length; i++) {
-        const ok = await invoke<boolean>('send_text', {msg: messageParts[i]});
+        const ok = await invoke<boolean>('send_text', {text: messageParts[i]});
         if (!ok) throw new Error(`send_text returned false for part ${i}`);
         
         // Небольшая задержка между отправками частей
@@ -452,6 +452,7 @@ export default function Chat({onBack}: ChatProps) {
               </div>
             )}
           </div>
+
           <Button
             type="submit"
             disabled={sending || !newMessage.trim() || status !== 'connected'}

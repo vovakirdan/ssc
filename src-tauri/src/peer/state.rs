@@ -31,6 +31,9 @@ pub static APP: Lazy<Mutex<Option<AppHandle>>> = Lazy::new(|| Mutex::new(None));
 /// Флаг установленного соединения
 pub static WAS_CONNECTED: Lazy<Mutex<bool>> = Lazy::new(|| Mutex::new(false));
 
+/// Флаг подтверждения SAS пользователем
+pub static SAS_CONFIRMED: Lazy<Mutex<bool>> = Lazy::new(|| Mutex::new(false));
+
 /// Отложенная задача для graceful disconnect
 pub static DISCONNECT_TASK: Lazy<Mutex<Option<tauri::async_runtime::JoinHandle<()>>>> =
     Lazy::new(|| Mutex::new(None));

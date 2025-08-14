@@ -1,5 +1,5 @@
 use crate::logger::{
-    dump_candidate, dump_selected_pair, emit_connected, emit_connection_failed,
+    dump_candidate, dump_selected_pair, emit_connection_failed,
     emit_connection_problem, emit_connection_recovered, emit_connection_recovering,
     emit_disconnected, log,
 };
@@ -102,7 +102,8 @@ pub async fn new_peer(initiator: bool, connection_id: String) -> Arc<RTCPeerConn
                 if crypto_exists {
                     log("Crypto context exists - re-emitting connected event");
                     emit_connection_recovered();
-                    emit_connected();
+                    // НЕ отправляем emit_connected() - ждем подтверждения SAS пользователем
+                    log("Crypto context exists but waiting for SAS confirmation");
                 } else {
                     log("Peer connection connected - waiting for crypto context");
                 }

@@ -3,7 +3,7 @@ use crate::logger::log;
 use crate::peer::crypto::u64_to_nonce;
 use crate::peer::state::{
     COLLECTING_CANDIDATES, CRYPTO, DATA_CH, DISCONNECT_TASK, LOCAL_CANDIDATES, MY_PRIV, MY_PUB,
-    PEER, PENDING_REMOTE_CANDIDATES, WAS_CONNECTED,
+    PEER, PENDING_REMOTE_CANDIDATES, SAS_CONFIRMED, WAS_CONNECTED,
 };
 use bytes::Bytes;
 use chacha20poly1305::aead::Aead;
@@ -13,6 +13,22 @@ use tauri::command;
 #[command]
 pub async fn send_text(text: String) -> bool {
     log(&format!("send_text called with: {}", text));
+    
+    // Проверяем, подтвержден ли SAS пользователем
+    let sas_confirmed = *SAS_CONFIRMED.lock().unwrap();
+    let crypto_exists = CRYPTO.lock().unwrap().is_some();
+    let data_ch_exists = DATA_CH.lock().unwrap().is_some();
+    
+    log(&format!(
+        "send_text state check: sas_confirmed={}, crypto_exists={}, data_ch_exists={}",
+        sas_confirmed, crypto_exists, data_ch_exists
+    ));
+    
+    if !sas_confirmed {
+        log("SAS not confirmed by user, not sending message");
+        return false;
+    }
+    
     let dc = { DATA_CH.lock().unwrap().as_ref().cloned() };
     if let Some(dc) = dc {
         // Получаем данные из мьютекса и освобождаем его
@@ -54,6 +70,28 @@ pub async fn send_text(text: String) -> bool {
     false
 }
 
+/// подтверждение SAS пользователем
+#[command]
+pub fn confirm_sas() -> bool {
+    log("confirm_sas called - user confirmed SAS");
+    *SAS_CONFIRMED.lock().unwrap() = true;
+    
+    // Отправляем событие подключения после подтверждения SAS
+    use crate::logger::emit_connected;
+    emit_connected();
+    
+    log("SAS confirmed, connection is now fully established");
+    true
+}
+
+/// отклонение SAS пользователем
+#[command]
+pub async fn reject_sas() {
+    log("reject_sas called - user rejected SAS");
+    // Сбрасываем соединение при отклонении SAS
+    disconnect().await;
+}
+
 /// получение fingerprint
 #[command]
 pub fn get_fingerprint() -> Option<String> {
@@ -73,7 +111,24 @@ pub fn get_fingerprint() -> Option<String> {
 /// проверка готовности соединения
 #[command]
 pub fn is_connected() -> bool {
-    CRYPTO.lock().unwrap().is_some()
+    let crypto_exists = CRYPTO.lock().unwrap().is_some();
+    let sas_confirmed = *SAS_CONFIRMED.lock().unwrap();
+    let result = crypto_exists && sas_confirmed;
+    
+    log(&format!(
+        "is_connected: crypto_exists={}, sas_confirmed={}, result={}",
+        crypto_exists, sas_confirmed, result
+    ));
+    
+    result
+}
+
+/// проверка состояния SAS
+#[command]
+pub fn get_sas_status() -> bool {
+    let sas_confirmed = *SAS_CONFIRMED.lock().unwrap();
+    log(&format!("get_sas_status: SAS_CONFIRMED={}", sas_confirmed));
+    sas_confirmed
 }
 
 /// ручное разъединение
