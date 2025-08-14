@@ -330,11 +330,11 @@ export default function Chat({onBack}: ChatProps) {
   const sendFile = async (file: File) => {
     // Читаем лимит из настроек (localStorage), но не больше 10 МБ
     const savedSettings = localStorage.getItem('ssc-settings');
-    let maxMB = 10;
+    let maxMB = 16; // дефолт синхронизирован с Rust
     if (savedSettings) {
       try {
         const parsed = JSON.parse(savedSettings);
-        if (typeof parsed.maxMediaMB === 'number') maxMB = Math.max(1, Math.min(10, parsed.maxMediaMB));
+        if (typeof parsed.maxMediaMB === 'number') maxMB = Math.max(1, Math.min(1024, parsed.maxMediaMB));
       } catch {}
     }
     const MAX_BYTES = maxMB * 1024 * 1024;
@@ -385,7 +385,7 @@ export default function Chat({onBack}: ChatProps) {
         name: file.name,
         mime: file.type || 'application/octet-stream',
         size: file.size,
-        totalChunks,
+        total_chunks: totalChunks,
       });
       if (!okMeta) throw new Error('send_media_start failed');
 
