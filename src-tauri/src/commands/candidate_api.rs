@@ -1,160 +1,142 @@
-use crate::logger::log;
-use crate::peer::connection::new_peer;
-use crate::peer::crypto::{dec_bundle, enc_bundle};
-use crate::peer::ice::{analyze_candidates, wait_for_candidates};
-use crate::peer::state::{APP, COLLECTING_CANDIDATES, LOCAL_CANDIDATES, PEER};
-use crate::peer::types::{ConnectionBundle, SdpPayload};
-use crate::utils::random_id;
- 
-use tauri::command;
-use tauri::AppHandle;
-use webrtc::ice_transport::ice_candidate::RTCIceCandidateInit;
-
-/// Генерация offer с полным набором ICE кандидатов
-#[command]
-pub async fn generate_offer_with_candidates(app: AppHandle) -> String {
-    *APP.lock().unwrap() = Some(app);
-    log("generate_offer_with_candidates called");
-
-    // Очищаем старые кандидаты
-    LOCAL_CANDIDATES.lock().unwrap().clear();
-    *COLLECTING_CANDIDATES.lock().unwrap() = true;
-
-    let connection_id = random_id();
-    let pc = new_peer(true, connection_id.clone()).await;
-    {
-        *PEER.lock().unwrap() = Some(pc.clone());
+use crate::{
+    errors::AppError,
+    peer::{
+        connection::new_peer,
+        crypto::{dec_bundle, enc_bundle},
+        state::{self, lock, Session},
+        types::{ConnectionBundle, SdpPayload},
+    },
+};
+use std::{sync::Arc, time::Duration};
+use tauri::{command, AppHandle};
+use webrtc::{
+    ice_transport::ice_candidate::RTCIceCandidateInit, peer_connection::sdp::sdp_type::RTCSdpType,
+};
+fn err(code: &str) -> AppError {
+    AppError::new(
+        code,
+        "invitation",
+        "Не удалось обработать данные соединения",
+        true,
+    )
+}
+fn validate(bundle: &ConnectionBundle, expected: RTCSdpType) -> Result<(), AppError> {
+    if bundle.sdp_payload.sdp.sdp_type != expected {
+        return Err(err("sdp_type"));
     }
-
-    log("Creating offer...");
-    let offer = pc.create_offer(None).await.unwrap();
-    pc.set_local_description(offer).await.unwrap();
-
-    // Ждем сбора кандидатов с таймаутом
-    log("Waiting for ICE candidates...");
-    let candidates = wait_for_candidates(10).await; // 10 секунд максимум
-
-    log(&format!("Collected {} ICE candidates", candidates.len()));
-    analyze_candidates(&candidates);
-
-    let bundle = ConnectionBundle {
+    if bundle.sdp_payload.id.len() != 32
+        || !bundle.sdp_payload.id.bytes().all(|c| c.is_ascii_hexdigit())
+        || bundle.ice_candidates.len() > 256
+        || bundle
+            .ice_candidates
+            .iter()
+            .any(|c| c.connection_id != bundle.sdp_payload.id)
+    {
+        return Err(err("session_mismatch"));
+    }
+    Ok(())
+}
+pub(crate) async fn local_bundle(s: &Arc<Session>, offer: bool) -> Result<String, AppError> {
+    let pc = lock(&s.data).pc.clone().ok_or_else(|| err("no_peer"))?;
+    let mut complete = pc.gathering_complete_promise().await;
+    let description = if offer {
+        pc.create_offer(None).await
+    } else {
+        pc.create_answer(None).await
+    }
+    .map_err(|_| err("sdp_create"))?;
+    pc.set_local_description(description)
+        .await
+        .map_err(|_| err("sdp_local"))?;
+    tokio::time::timeout(Duration::from_secs(10), complete.recv())
+        .await
+        .map_err(|_| err("ice_timeout"))?;
+    s.ensure_active()?;
+    let sdp = pc
+        .local_description()
+        .await
+        .ok_or_else(|| err("sdp_missing"))?;
+    let candidates = lock(&s.data).candidates.clone();
+    enc_bundle(&ConnectionBundle {
         sdp_payload: SdpPayload {
-            sdp: pc.local_description().await.unwrap(),
-            id: connection_id,
+            sdp,
+            id: s.connection_id.clone(),
             ts: chrono::Utc::now().timestamp(),
         },
         ice_candidates: candidates,
-    };
-
-    // Компактное кодирование бандла
-    enc_bundle(&bundle)
+    })
 }
-
-/// Принятие offer с полным набором ICE кандидатов
-#[command]
-pub async fn accept_offer_with_candidates(app: AppHandle, encoded: String) -> String {
-    *APP.lock().unwrap() = Some(app);
-    log("accept_offer_with_candidates called");
-
-    // Декодируем bundle
-    let bundle = dec_bundle(&encoded);
-
-    // Очищаем старые кандидаты
-    LOCAL_CANDIDATES.lock().unwrap().clear();
-    *COLLECTING_CANDIDATES.lock().unwrap() = true;
-
-    let pc = new_peer(false, bundle.sdp_payload.id.clone()).await;
-    {
-        *PEER.lock().unwrap() = Some(pc.clone());
-    }
-
-    // Устанавливаем remote description
+pub(crate) async fn remote(s: &Arc<Session>, bundle: ConnectionBundle) -> Result<(), AppError> {
+    let pc = lock(&s.data).pc.clone().ok_or_else(|| err("no_peer"))?;
+    s.ensure_active()?;
     pc.set_remote_description(bundle.sdp_payload.sdp)
         .await
-        .unwrap();
-
-    // Применяем все кандидаты из offer
-    for candidate in bundle.ice_candidates {
-        log(&format!("Applying remote candidate: {:?}", candidate));
-        let ice_candidate = RTCIceCandidateInit {
-            candidate: candidate.candidate,
-            sdp_mid: candidate.sdp_mid,
-            sdp_mline_index: candidate.sdp_mline_index,
+        .map_err(|_| err("sdp_remote"))?;
+    s.ensure_active()?;
+    for c in bundle.ice_candidates {
+        s.ensure_active()?;
+        pc.add_ice_candidate(RTCIceCandidateInit {
+            candidate: c.candidate,
+            sdp_mid: c.sdp_mid,
+            sdp_mline_index: c.sdp_mline_index,
             username_fragment: None,
-        };
-
-        if let Err(e) = pc.add_ice_candidate(ice_candidate).await {
-            log(&format!("Failed to add candidate: {:?}", e));
-        }
+        })
+        .await
+        .map_err(|_| err("ice_candidate"))?;
     }
-
-    // Создаем answer
-    let answer = pc.create_answer(None).await.unwrap();
-    pc.set_local_description(answer).await.unwrap();
-
-    // Ждем сбора кандидатов
-    log("Waiting for ICE candidates...");
-    let candidates = wait_for_candidates(10).await;
-
-    log(&format!(
-        "Collected {} ICE candidates for answer",
-        candidates.len()
-    ));
-    analyze_candidates(&candidates);
-
-    let bundle = ConnectionBundle {
-        sdp_payload: SdpPayload {
-            sdp: pc.local_description().await.unwrap(),
-            id: bundle.sdp_payload.id,
-            ts: chrono::Utc::now().timestamp(),
-        },
-        ice_candidates: candidates,
-    };
-
-    // Компактное кодирование бандла
-    enc_bundle(&bundle)
+    Ok(())
+}
+async fn finish<T>(s: &Arc<Session>, result: Result<T, AppError>) -> Result<T, AppError> {
+    if let Err(error) = &result {
+        s.error(error);
+        s.close().await;
+    }
+    result
+}
+#[command]
+pub async fn generate_offer_with_candidates(app: AppHandle) -> Result<String, AppError> {
+    let s = state::begin(crate::utils::random_id(), app).await;
+    let result = async {
+        new_peer(&s, true).await?;
+        local_bundle(&s, true).await
+    }
+    .await;
+    finish(&s, result).await
+}
+#[command]
+pub async fn accept_offer_with_candidates(
+    app: AppHandle,
+    encoded: String,
+) -> Result<String, AppError> {
+    let bundle = decode_checked(&encoded, RTCSdpType::Offer)?;
+    let s = state::begin(bundle.sdp_payload.id.clone(), app).await;
+    let result = async {
+        new_peer(&s, false).await?;
+        remote(&s, bundle).await?;
+        local_bundle(&s, false).await
+    }
+    .await;
+    finish(&s, result).await
+}
+#[command]
+pub async fn set_answer_with_candidates(encoded: String) -> Result<bool, AppError> {
+    let bundle = decode_checked(&encoded, RTCSdpType::Answer)?;
+    let s = state::current()?;
+    s.ensure_active()?;
+    if bundle.sdp_payload.id != s.connection_id {
+        return Err(err("session_mismatch"));
+    }
+    let result = remote(&s, bundle).await.map(|_| true);
+    finish(&s, result).await
 }
 
-/// Установка answer с полным набором ICE кандидатов
-#[command]
-pub async fn set_answer_with_candidates(app: AppHandle, encoded: String) -> bool {
-    *APP.lock().unwrap() = Some(app);
-    log("set_answer_with_candidates called");
-
-    // Декодируем bundle
-    let bundle = dec_bundle(&encoded);
-
-    let pc = { PEER.lock().unwrap().as_ref().cloned() };
-    if let Some(pc) = pc {
-        // Устанавливаем remote description
-        match pc.set_remote_description(bundle.sdp_payload.sdp).await {
-            Ok(_) => {
-                log("Remote description set successfully");
-
-                // Применяем все кандидаты из answer
-                for candidate in bundle.ice_candidates {
-                    log(&format!("Applying remote candidate: {:?}", candidate));
-                    let ice_candidate = RTCIceCandidateInit {
-                        candidate: candidate.candidate,
-                        sdp_mid: candidate.sdp_mid,
-                        sdp_mline_index: candidate.sdp_mline_index,
-                        username_fragment: None,
-                    };
-
-                    if let Err(e) = pc.add_ice_candidate(ice_candidate).await {
-                        log(&format!("Failed to add candidate: {:?}", e));
-                    }
-                }
-
-                true
-            }
-            Err(e) => {
-                log(&format!("Failed to set remote description: {:?}", e));
-                false
-            }
-        }
-    } else {
-        log("No peer connection available");
-        false
+fn decode_checked(encoded: &str, kind: RTCSdpType) -> Result<ConnectionBundle, AppError> {
+    let result = dec_bundle(encoded.trim()).and_then(|b| {
+        validate(&b, kind)?;
+        Ok(b)
+    });
+    if let Err(e) = &result {
+        crate::diagnostics::record(0, "invitation", &e.stage, "error", Some(&e.code));
     }
+    result
 }

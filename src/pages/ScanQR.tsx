@@ -1,11 +1,11 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Textarea } from '@/components/ui/textarea';
 import { Scan, ArrowLeft, Link, Copy, Check, Download } from 'lucide-react';
 import { toast } from 'sonner';
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { errorMessage } from "@/lib/session";
 import jsQR from 'jsqr';
 import { QRCodeSVG, QRCodeCanvas } from 'qrcode.react';
 
@@ -14,21 +14,14 @@ interface ScanQRProps {
   onConnected: () => void;
 }
 
-const ScanQR = ({ onBack, onConnected }: ScanQRProps) => {
+const ScanQR = ({ onBack }: ScanQRProps) => {
   const [offerInput, setOfferInput] = useState('');
   const [answer, setAnswer] = useState('');
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
   const [fileLoading, setFileLoading] = useState(false);
 
-  // Слушаем событие успешного подключения
-  useEffect(() => {
-    const un = listen("ssc-connected", () => {
-      console.log('ScanQR: received ssc-connected event');
-      onConnected();
-    });
-    return () => { un.then(f => f()); };
-  }, [onConnected]);
+
 
   const handleAcceptOffer = async () => {
     if (!offerInput.trim()) {
@@ -42,8 +35,8 @@ const ScanQR = ({ onBack, onConnected }: ScanQRProps) => {
       setAnswer(result);
       toast.success('Ответ сгенерирован! Отправьте его собеседнику.');
     } catch (error) {
-      toast.error('Ошибка при обработке предложения');
-      console.error('Error accepting offer:', error);
+      toast.error(errorMessage(error, 'Ошибка при обработке предложения'));
+
     } finally {
       setLoading(false);
     }

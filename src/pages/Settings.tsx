@@ -73,7 +73,7 @@ const Settings = ({ onBack }: SettingsProps) => {
         };
         setSettings(validatedSettings);
       } catch (error) {
-        console.error('Error parsing saved settings:', error);
+
         // Keep default settings if parsing fails
       }
     }
@@ -88,7 +88,7 @@ const Settings = ({ onBack }: SettingsProps) => {
       if (server.type === 'turn' && (!server.username || !server.credential)) {
         throw new Error('TURN server requires username and credential');
       }
-      console.log(server);
+
 
       // Проверяем доступность сервера
       const isAvailable = await invoke('check_ice_server_availability', {
@@ -102,7 +102,7 @@ const Settings = ({ onBack }: SettingsProps) => {
       });
 
       if (!isAvailable) {
-        console.log('Server is not accessible');
+
         throw new Error('Server is not accessible');
       }
       
@@ -158,14 +158,12 @@ const Settings = ({ onBack }: SettingsProps) => {
       return;
     }
 
-    // Сохраняем настройки в localStorage
-    localStorage.setItem('ssc-settings', JSON.stringify(settings));
-
     // Синхронизируем с Rust
     const success = await syncIceServers(settings.servers);
     
     if (success) {
-      console.log('Settings saved and synced with Rust:', settings);
+      localStorage.setItem('ssc-settings', JSON.stringify(settings));
+
       toast({
         title: "Успешно",
         description: "Настройки сохранены и применены"
@@ -174,7 +172,7 @@ const Settings = ({ onBack }: SettingsProps) => {
     }
   };
 
-  const handleReset = () => {
+  const handleReset = async () => {
     const defaultSettings = {
       servers: [
         {
@@ -185,6 +183,7 @@ const Settings = ({ onBack }: SettingsProps) => {
       ],
       offerTTL: 5
     };
+    if (!await syncIceServers(defaultSettings.servers)) return;
     setSettings(defaultSettings);
     localStorage.setItem('ssc-settings', JSON.stringify(defaultSettings));
     toast({

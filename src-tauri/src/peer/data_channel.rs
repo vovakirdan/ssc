@@ -1,179 +1,296 @@
-use crate::commands::util_api::get_fingerprint;
-use crate::logger::log;
-use crate::logger::{emit_disconnected, emit_message, emit_sas_to_ui};
-use crate::peer::crypto::{build_ctx, u64_to_nonce};
-use crate::peer::state::{
-    COLLECTING_CANDIDATES, CRYPTO, DATA_CH, DISCONNECT_TASK, LOCAL_CANDIDATES, MY_PRIV,
-    MY_PUB, PENDING_REMOTE_CANDIDATES, SAS_CONFIRMED, TAG_LEN, WAS_CONNECTED,
+use super::{
+    crypto::KeyExchange,
+    protocol::{KIND_CHUNK, KIND_READY},
+    state::{lock, Phase, Session},
 };
-use base64::engine::general_purpose::STANDARD;
-use base64::Engine;
+use crate::errors::AppError;
 use bytes::Bytes;
-use chacha20poly1305::aead::Aead;
-use ring::{agreement, rand as ring_rand};
 use std::sync::Arc;
-use webrtc::data_channel::RTCDataChannel;
+use webrtc::data_channel::{data_channel_state::RTCDataChannelState, RTCDataChannel};
 
-/// общий обработчик data-channel
-pub fn attach_dc(dc: &Arc<RTCDataChannel>) {
-    log("attach_dc called - clearing old state");
-
-    // отменяем отложенный disconnect, если он был
-    if let Some(handle) = DISCONNECT_TASK.lock().unwrap().take() {
-        log("Aborting pending disconnect task in attach_dc");
-        handle.abort();
-    }
-
-    // Очищаем старое состояние перед созданием нового соединения
-    log("Clearing CRYPTO context in attach_dc");
-    *CRYPTO.lock().unwrap() = None;
-    *MY_PRIV.lock().unwrap() = None;
-    *MY_PUB.lock().unwrap() = None;
-    *WAS_CONNECTED.lock().unwrap() = false;
-    *SAS_CONFIRMED.lock().unwrap() = false; // Сбрасываем флаг подтверждения SAS
-
-    // очищаем отложенные кандидаты
-    PENDING_REMOTE_CANDIDATES.lock().unwrap().clear();
-
-    // очищаем локальные кандидаты
-    LOCAL_CANDIDATES.lock().unwrap().clear();
-    *COLLECTING_CANDIDATES.lock().unwrap() = false;
-
+pub fn attach_dc(s: &Arc<Session>, dc: &Arc<RTCDataChannel>) -> Result<(), AppError> {
+    s.ensure_active()?;
+    let exchange = KeyExchange::new()?;
+    let public = exchange.public_key();
     {
-        *DATA_CH.lock().unwrap() = Some(dc.clone());
+        let mut d = lock(&s.data);
+        if d.closed {
+            return Err(AppError::new(
+                "session_closed",
+                "session",
+                "Сессия завершена",
+                true,
+            ));
+        }
+        if d.dc.is_some() {
+            return Err(AppError::new(
+                "duplicate_channel",
+                "key_exchange",
+                "Повторный канал отклонён",
+                false,
+            ));
+        }
+        d.exchange = Some(exchange);
+        d.dc = Some(dc.clone());
     }
-
-    // Генерируем ключи сразу при создании data channel
-    let rng = ring_rand::SystemRandom::new();
-    let my_priv = agreement::EphemeralPrivateKey::generate(&agreement::X25519, &rng).unwrap();
-    let my_pub = my_priv.compute_public_key().unwrap();
-    let my_pub_bytes = <[u8; 32]>::try_from(my_pub.as_ref()).unwrap();
-    *MY_PRIV.lock().unwrap() = Some(my_priv);
-    *MY_PUB.lock().unwrap() = Some(my_pub_bytes);
-    log(&format!(
-        "Generated pub key: {}",
-        hex::encode(my_pub.as_ref())
-    ));
-
-    // Отправляем наш pub-key когда data channel открыт
-    dc.on_open(Box::new({
-        let dc = dc.clone();
-        move || {
-            log("Data channel opened, sending pub key...");
-            tauri::async_runtime::spawn({
-                let dc = dc.clone();
-                async move {
-                    // Отправляем публичный ключ в новом формате: PUBKEY:{base64_encoded_key}
-                    let pubkey_b64 = STANDARD.encode(my_pub.as_ref());
-                    let msg = format!("PUBKEY:{}", pubkey_b64);
-                    let _result = dc.send(&Bytes::from(msg)).await;
-                    log(&format!("Sent pub key: {}", hex::encode(my_pub.as_ref())));
+    let weak = Arc::downgrade(s);
+    let weak_dc = Arc::downgrade(dc);
+    dc.on_open(Box::new(move || {
+        let weak = weak.clone();
+        let weak_dc = weak_dc.clone();
+        Box::pin(async move {
+            if let (Some(s), Some(dc)) = (weak.upgrade(), weak_dc.upgrade()) {
+                if !s.active() {
+                    return;
                 }
-            });
-            Box::pin(async {})
-        }
+                let mut hello = vec![2, 0];
+                hello.extend_from_slice(&public);
+                if dc.send(&Bytes::from(hello)).await.is_err() {
+                    s.error(&AppError::new(
+                        "key_send",
+                        "key_exchange",
+                        "Не удалось отправить публичный ключ",
+                        true,
+                    ));
+                    s.close_from_callback();
+                } else {
+                    crate::diagnostics::record(
+                        s.generation,
+                        "crypto",
+                        "key_exchange",
+                        "key_sent",
+                        None,
+                    );
+                    s.publish();
+                }
+            }
+        })
     }));
-
-    dc.on_message(Box::new(|msg| {
-        log(&format!("Received message, length: {}", msg.data.len()));
-
-        // Пробуем разобрать как строку для обработки PUBKEY сообщений
-        if let Ok(text) = std::str::from_utf8(&msg.data) {
-            if let Some(rest) = text.strip_prefix("PUBKEY:") {
-                // Декодируем base64
-                if let Ok(pub_bytes) = STANDARD.decode(rest) {
-                    if pub_bytes.len() == 32 {
-                        let mut peer_pub = [0u8; 32];
-                        peer_pub.copy_from_slice(&pub_bytes);
-                        log(&format!("Received pub key: {}", hex::encode(&peer_pub)));
-
-                        // Проверяем, не создали ли мы уже криптографический контекст
-                        if CRYPTO.lock().unwrap().is_some() {
-                            log("Crypto context already exists, skipping...");
-                            return Box::pin(async {});
-                        }
-
-                        // Строим криптографический контекст
-                        let ctx = build_ctx(&peer_pub);
-                        let sas = ctx.sas.clone();
-                        log(&format!("SAS generated: {}", sas));
-                        *CRYPTO.lock().unwrap() = Some(ctx);
-
-                        // Отправляем SAS на UI для подтверждения пользователем
-                        emit_sas_to_ui(&sas);
-                        log("SAS sent to UI for user confirmation");
-
-                        // НЕ отправляем событие подключения сразу - ждем подтверждения SAS
-                        log("Crypto context established, waiting for SAS confirmation");
-
-                        // Проверим, что fingerprint доступен сразу после создания контекста
-                        let _test_fp = get_fingerprint();
-                        log(&format!(
-                            "Fingerprint immediately after context creation: {:?}",
-                            _test_fp
-                        ));
-
-                        return Box::pin(async {});
-                    }
+    let weak = Arc::downgrade(s);
+    dc.on_message(Box::new(move |msg| {
+        let weak = weak.clone();
+        Box::pin(async move {
+            if let Some(s) = weak.upgrade() {
+                if !s.active() {
+                    return;
+                }
+                if let Err(error) = receive(&s, &msg.data) {
+                    s.error(&error);
+                    s.close_from_callback();
                 }
             }
+        })
+    }));
+    let weak = Arc::downgrade(s);
+    dc.on_close(Box::new(move || {
+        let weak = weak.clone();
+        Box::pin(async move {
+            if let Some(s) = weak.upgrade() {
+                if s.active() {
+                    s.close_from_callback();
+                }
+            }
+        })
+    }));
+    Ok(())
+}
+pub(super) fn receive(s: &Arc<Session>, bytes: &[u8]) -> Result<(), AppError> {
+    if bytes.starts_with(&[2, 0]) {
+        if bytes.len() != 34 {
+            return Err(AppError::new(
+                "key_length",
+                "key_exchange",
+                "Некорректный публичный ключ",
+                false,
+            ));
         }
-
-        // ----- иначе зашифрованное сообщение -----
-        // Проверяем, подтвержден ли SAS пользователем
-        if !*SAS_CONFIRMED.lock().unwrap() {
-            log("SAS not confirmed by user, ignoring encrypted message");
-            return Box::pin(async {});
-        }
-
-        let mut lock = CRYPTO.lock().unwrap();
-        if let Some(ref mut ctx) = *lock {
-            if msg.data.len() < TAG_LEN {
-                log(&format!(
-                    "Message too short: {} < {}",
-                    msg.data.len(),
-                    TAG_LEN
+        let peer = <[u8; 32]>::try_from(&bytes[2..])
+            .map_err(|_| AppError::new("key_length", "key_exchange", "Некорректный ключ", false));
+        let peer = peer?;
+        let sas = {
+            let mut d = lock(&s.data);
+            if d.closed {
+                return Err(AppError::new(
+                    "session_closed",
+                    "session",
+                    "Сессия завершена",
+                    true,
                 ));
-                return Box::pin(async {});
             }
-
-            let nonce = u64_to_nonce(ctx.recv_n);
-            let ciphertext = &msg.data[..];
-
-            match ctx.opening.decrypt(&nonce, ciphertext) {
-                Ok(plaintext) => {
-                    // Простая защита от replay: проверяем что sequence number больше последнего принятого
-                    if ctx.recv_n > ctx.last_accepted_recv {
-                        // Обновляем последний принятый sequence number
-                        ctx.last_accepted_recv = ctx.recv_n;
-                        ctx.recv_n += 1;
-
-                        let plain = String::from_utf8_lossy(&plaintext).to_string();
-                        log(&format!("Decrypted message: {}", plain));
-                        emit_message(&plain);
-                    } else {
-                        log(&format!(
-                            "Replay attack detected: received seq {} <= last accepted seq {}",
-                            ctx.recv_n, ctx.last_accepted_recv
-                        ));
-                    }
-                }
-                Err(_) => {
-                    log(&format!(
-                        "Failed to decrypt message with seq {}",
-                        ctx.recv_n
+            let exchange = d.exchange.take().ok_or_else(|| {
+                AppError::new(
+                    "duplicate_key",
+                    "key_exchange",
+                    "Повторный обмен ключами",
+                    false,
+                )
+            })?;
+            let crypto = exchange.finish(peer)?;
+            let sas = crypto.sas.clone();
+            d.crypto = Some(crypto);
+            sas
+        };
+        s.emit("ssc-sas", sas);
+        s.publish();
+        return Ok(());
+    }
+    let message = {
+        let mut d = lock(&s.data);
+        if d.closed {
+            return Err(AppError::new(
+                "session_closed",
+                "session",
+                "Сессия завершена",
+                true,
+            ));
+        }
+        let crypto = d.crypto.as_mut().ok_or_else(|| {
+            AppError::new(
+                "key_required",
+                "key_exchange",
+                "Обмен ключами не завершён",
+                false,
+            )
+        })?;
+        let (kind, payload) = crypto.decrypt(bytes)?;
+        match kind {
+            KIND_READY => {
+                if !payload.is_empty() {
+                    return Err(AppError::new(
+                        "ready_payload",
+                        "verification",
+                        "Некорректное подтверждение",
+                        false,
                     ));
                 }
+                d.peer_ready = true;
+                None
             }
-        } else {
-            log("No crypto context available for message decryption");
+            KIND_CHUNK => {
+                if !d.local_ready || !d.peer_ready {
+                    return Err(AppError::new(
+                        "not_ready",
+                        "verification",
+                        "Сверка кода ещё не завершена",
+                        false,
+                    ));
+                }
+                d.reassembler.push(&payload)?
+            }
+            _ => {
+                return Err(AppError::new(
+                    "frame_type",
+                    "crypto",
+                    "Неизвестный тип сообщения",
+                    false,
+                ))
+            }
         }
-        Box::pin(async {})
-    }));
-
-    dc.on_close(Box::new(|| {
-        log("Data channel closed - emitting disconnected");
-        emit_disconnected();
-        Box::pin(async {})
-    }));
+    };
+    if let Some(text) = message {
+        {
+            let mut d = lock(&s.data);
+            if d.closed {
+                return Err(AppError::new(
+                    "session_closed",
+                    "session",
+                    "Сессия завершена",
+                    true,
+                ));
+            }
+            if d.inbox.len() >= 128
+                || d.inbox.iter().map(|m| m.text.len()).sum::<usize>() + text.len()
+                    > 8 * 1024 * 1024
+            {
+                return Err(AppError::new(
+                    "inbox_full",
+                    "message",
+                    "Переполнен буфер входящих сообщений",
+                    true,
+                ));
+            }
+            d.next_message_id += 1;
+            let id = d.next_message_id;
+            d.inbox.push(super::state::ReceivedMessage {
+                generation: s.generation,
+                id: format!("received-{}-{id}", s.generation),
+                text: text.clone(),
+            });
+        }
+        s.emit(
+            "ssc-chat-message",
+            serde_json::json!({"generation":s.generation,"text":text}),
+        );
+        crate::diagnostics::record(s.generation, "chat", "message", "received", None);
+    }
+    s.publish();
+    Ok(())
+}
+pub async fn send_encrypted(s: &Arc<Session>, kind: u8, payload: &[u8]) -> Result<(), AppError> {
+    s.ensure_active()?;
+    let (dc, frame) = {
+        let mut d = lock(&s.data);
+        let dc =
+            d.dc.clone()
+                .filter(|dc| dc.ready_state() == RTCDataChannelState::Open)
+                .ok_or_else(|| {
+                    AppError::new("channel_closed", "data_channel", "Канал недоступен", true)
+                })?;
+        let crypto = d
+            .crypto
+            .as_mut()
+            .ok_or_else(|| AppError::new("key_required", "crypto", "Нет ключей сессии", false))?;
+        (dc, crypto.encrypt(kind, payload)?)
+    };
+    dc.send(&Bytes::from(frame)).await.map_err(|_| {
+        AppError::new(
+            "send_failed",
+            "message",
+            "Не удалось передать сообщение каналу",
+            true,
+        )
+    })?;
+    s.ensure_active()
+}
+pub async fn confirm(s: &Arc<Session>) -> Result<bool, AppError> {
+    let _sending = s.sending.lock().await;
+    s.ensure_active()?;
+    if lock(&s.data).local_ready {
+        return Ok(true);
+    }
+    {
+        let mut d = lock(&s.data);
+        if d.closed {
+            return Err(AppError::new(
+                "session_closed",
+                "session",
+                "Сессия завершена",
+                true,
+            ));
+        }
+        d.local_ready = true;
+    }
+    if let Err(error) = send_encrypted(s, KIND_READY, &[]).await {
+        lock(&s.data).local_ready = false;
+        return Err(error);
+    }
+    s.publish();
+    Ok(true)
+}
+pub async fn send_text_session(s: &Arc<Session>, text: &str) -> Result<bool, AppError> {
+    let parts = super::protocol::chunks(text)?;
+    let _sending = s.sending.lock().await;
+    if s.snapshot().phase != Phase::Connected {
+        return Err(AppError::new(
+            "not_ready",
+            "verification",
+            "Ожидаем подтверждения собеседника",
+            true,
+        ));
+    }
+    for payload in parts {
+        send_encrypted(s, KIND_CHUNK, &payload).await?;
+    }
+    crate::diagnostics::record(s.generation, "chat", "message", "sent_to_channel", None);
+    Ok(true)
 }

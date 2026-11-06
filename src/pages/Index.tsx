@@ -1,5 +1,9 @@
 import { useState, useEffect } from 'react';
-import { listen } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core";
+import { toast } from "sonner";
+import { errorMessage, nativeListener, useSession } from "@/lib/session";
+import { applySavedIceServers } from "@/lib/preferences";
+import DiagnosticsPanel from "@/components/DiagnosticsPanel";
 import Welcome from './Welcome';
 import GenerateQR from './GenerateQR';
 import ScanQR from './ScanQR';
@@ -10,11 +14,27 @@ import Settings from './Settings';
 
 type AppMode = 'welcome' | 'generate' | 'scan' | 'verify' | 'chat' | 'settings';
 
-const Index = () => {
+const IndexContent = () => {
+  const { error: connectionError } = useSession();
+  useEffect(() => { if (connectionError) toast.error(connectionError); }, [connectionError]);
   const [mode, setMode] = useState<AppMode>('welcome');
   const [showOptions, setShowOptions] = useState(false);
   const [ttl, setTtl] = useState(5); // TTL по умолчанию 5 минут
   const [pendingSas, setPendingSas] = useState<string | null>(null); // Сохраняем SAS для передачи в VerifyFingerprint
+
+  const [preferencesReady, setPreferencesReady] = useState(false);
+  const [preferencesError, setPreferencesError] = useState<string | null>(null);
+  useEffect(() => {
+    if (mode !== 'welcome') return;
+    let disposed = false;
+    setPreferencesReady(false);
+    void applySavedIceServers().then(() => {
+      if (!disposed) { setPreferencesReady(true); setPreferencesError(null); }
+    }).catch(failure => {
+      if (!disposed) setPreferencesError(errorMessage(failure, 'Не удалось применить сохранённые серверы. Проверьте настройки.'));
+    });
+    return () => { disposed = true; };
+  }, [mode]);
 
   // Загружаем TTL из настроек при монтировании
   useEffect(() => {
@@ -25,30 +45,35 @@ const Index = () => {
         if (typeof parsedSettings.offerTTL === 'number') {
           setTtl(parsedSettings.offerTTL);
         }
-      } catch (error) {
-        console.error('Error parsing saved settings:', error);
+      } catch {
+          // Invalid stored preferences are ignored; defaults remain active.
       }
     }
   }, []);
 
   // Слушаем событие ssc-sas для автоматического перехода к проверке SAS
   useEffect(() => {
-    const unlistenSas = listen<string>('ssc-sas', (event) => {
-      console.log('Index: Received ssc-sas event, switching to verify mode:', event.payload);
+    const unlistenSas = nativeListener<string>('ssc-sas', (event) => {
+
       setPendingSas(event.payload); // Сохраняем SAS
       setMode('verify');
     });
 
     return () => {
-      unlistenSas.then(f => f());
+      unlistenSas();
     };
   }, []);
 
   const handleStart = () => {
+    if (!preferencesReady) { toast.error(preferencesError || 'Применяем настройки подключения…'); return; }
     setShowOptions(true);
   };
 
-  const handleBack = () => {
+  const handleBack = async () => {
+    if (["generate", "scan", "verify"].includes(mode)) {
+      try { await invoke("disconnect"); }
+      catch (failure) { toast.error(errorMessage(failure)); return; }
+    }
     if (showOptions) {
       setShowOptions(false);
       setMode('welcome');
@@ -72,20 +97,21 @@ const Index = () => {
         if (typeof parsedSettings.offerTTL === 'number') {
           setTtl(parsedSettings.offerTTL);
         }
-      } catch (error) {
-        console.error('Error parsing saved settings:', error);
+      } catch {
+          // Invalid stored preferences are ignored; defaults remain active.
       }
     }
   };
 
   // Обновляем TTL при переходе в режим generate
   const handleGenerate = () => {
+    if (!preferencesReady) return;
     loadTTL(); // Загружаем актуальный TTL
     setMode('generate');
   };
 
   const handleConnected = () => {
-    console.log('Index: handleConnected called - switching to verify mode');
+
     setMode('verify');
   };
 
@@ -151,7 +177,7 @@ const Index = () => {
             </button>
 
             <button
-              onClick={() => setMode('scan')}
+              onClick={() => { if (preferencesReady) setMode('scan'); }}
               className="w-full p-6 bg-slate-800/50 hover:bg-slate-700/50 border border-slate-700 rounded-lg transition-all text-left"
             >
               <h3 className="text-white font-semibold mb-2">Сканировать QR-код</h3>
@@ -170,7 +196,7 @@ const Index = () => {
     );
   }
 
-  return <Welcome onStart={handleStart} onSettings={handleSettings} />;
+  return <>{preferencesError && <p role="alert" className="fixed top-0 left-0 right-0 bg-red-950 text-white p-3 z-40">{preferencesError}</p>}<Welcome onStart={handleStart} onSettings={handleSettings} /></>;
 };
 
-export default Index;
+export default function Index() { return <><IndexContent /><DiagnosticsPanel /></>; }

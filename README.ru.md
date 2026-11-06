@@ -1,5 +1,7 @@
 # ZeroID: Абсолютно секретный чат
 
+> Desktop v2: [protocol, diagnostics and validation](docs/DESKTOP_PROTOCOL.md). Both participants must update; older invitations are unsupported.
+
 ![Rust](https://img.shields.io/badge/-Rust-000000?style=flat-square&logo=rust)
 
 **ZeroID**  — абсолютно секретный чат для безопасного общения без регистрации, авторизации и отслеживания. Ваше устройство и есть сервер, поэтому никто не сможет получить доступ к вашей переписке или истории сообщений.

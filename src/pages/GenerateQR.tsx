@@ -1,11 +1,11 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { QrCode as QrCodeIcon, Copy, Check, ArrowLeft, Scan, Download, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { errorMessage } from "@/lib/session";
 import { QRCodeSVG } from 'qrcode.react';
 import { QRCodeCanvas } from 'qrcode.react';
 import FadeContent from '@/components/FadeContent';
@@ -19,7 +19,7 @@ interface GenerateQRProps {
   ttl?: number; // TTL в минутах
 }
 
-const GenerateQR = ({ onBack, onConnected, autoGenerate, ttl: ttlMinutes = 5 }: GenerateQRProps) => {
+const GenerateQR = ({ onBack, autoGenerate, ttl: ttlMinutes = 5 }: GenerateQRProps) => {
   const [offer, setOffer] = useState<string>('');
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -28,63 +28,36 @@ const GenerateQR = ({ onBack, onConnected, autoGenerate, ttl: ttlMinutes = 5 }: 
   // TTL для QR-кода (секунды)
   const TTL = ttlMinutes * 60;
   const [ttl, setTtl] = useState(TTL);
-  const timerRef = useRef<NodeJS.Timeout | null>(null);
-
-  // Слушаем событие успешного подключения
-  useEffect(() => {
-    const un = listen("ssc-connected", () => {
-      console.log('GenerateQR: received ssc-connected event');
-      onConnected();
-    });
-    return () => { un.then(f => f()); };
-  }, [onConnected]);
-
-  // Генерируем QR-код автоматически при открытии страницы
-  useEffect(() => {
-    if (autoGenerate && !offer && !loading) {
-      generateOffer();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoGenerate]);
-
-  // Обновляем TTL и перегенерируем QR-код по истечении времени
-  useEffect(() => {
-    if (!offer) {
-      setTtl(TTL);
-      if (timerRef.current) clearInterval(timerRef.current);
-      return;
-    }
-    setTtl(TTL);
-    if (timerRef.current) clearInterval(timerRef.current);
-    timerRef.current = setInterval(() => {
-      setTtl(prev => {
-        if (prev <= 1) {
-          // Время истекло — генерируем новый QR-код
-          generateOffer();
-          return TTL;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-    };
-  }, [offer]);
-
-  const generateOffer = async () => {
+  const generating = useRef(false);
+  const mounted = useRef(true);
+  const generateOffer = useCallback(async () => {
+    if (generating.current) return;
+    generating.current = true;
     setLoading(true);
     try {
-      const result = await invoke('generate_offer_with_candidates') as string;
-      setOffer(result);
-      setAwaitingAnswer(true);
-      toast.success('QR-код сгенерирован!');
+      const result = await invoke<string>('generate_offer_with_candidates');
+      if (mounted.current) { setOffer(result); setAwaitingAnswer(true); toast.success('QR-код сгенерирован!'); }
     } catch (error) {
-      toast.error('Ошибка генерации QR-кода');
-      console.error('Error generating offer:', error);
+      if (mounted.current) toast.error(errorMessage(error, 'Ошибка генерации QR-кода'));
     } finally {
-      setLoading(false);
+      generating.current = false;
+      if (mounted.current) setLoading(false);
     }
-  };
+  }, []);
+  useEffect(() => {
+    mounted.current = true;
+    if (autoGenerate) void generateOffer();
+    return () => { mounted.current = false; };
+  }, [autoGenerate, generateOffer]);
+  useEffect(() => {
+    setTtl(TTL);
+    if (!offer) return;
+    const timer = setInterval(() => setTtl(previous => Math.max(0, previous - 1)), 1000);
+    return () => clearInterval(timer);
+  }, [offer, TTL]);
+  useEffect(() => {
+    if (offer && ttl === 0) void generateOffer();
+  }, [offer, ttl, generateOffer]);
 
   const copyToClipboard = async () => {
     try {
@@ -107,14 +80,14 @@ const GenerateQR = ({ onBack, onConnected, autoGenerate, ttl: ttlMinutes = 5 }: 
     try {
       const success = await invoke('set_answer_with_candidates', { encoded: answer }) as boolean;
       if (success) {
-        toast.success('Соединение установлено!');
-        // Не вызываем onConnected() здесь, событие ssc-connected сделает это автоматически
+        toast.success('Ответ принят. Устанавливаем соединение…');
+        // Index opens verification after receiving the session SAS.
       } else {
         toast.error('Не удалось установить соединение');
       }
     } catch (error) {
-      toast.error('Ошибка при установке соединения');
-      console.error('Error setting answer:', error);
+      toast.error(errorMessage(error, 'Ошибка при установке соединения'));
+
     } finally {
       setLoading(false);
     }

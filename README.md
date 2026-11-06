@@ -1,5 +1,7 @@
 # ZeroID: Absolutely Secret Chat
 
+> Desktop v2: [protocol, diagnostics and validation](docs/DESKTOP_PROTOCOL.md). Both participants must update; older invitations are unsupported.
+
 ![Rust](https://img.shields.io/badge/-Rust-000000?style=flat-square&logo=rust)
 
 ## [🇷🇺](./README.ru.md)

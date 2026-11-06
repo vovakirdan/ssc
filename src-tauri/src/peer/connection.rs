@@ -1,22 +1,10 @@
-use crate::logger::{
-    dump_candidate, dump_selected_pair, emit_connection_failed,
-    emit_connection_problem, emit_connection_recovered, emit_connection_recovering,
-    emit_disconnected, log,
+use super::{
+    data_channel::attach_dc,
+    state::{lock, Session, MANAGER},
+    types::{IceCandidate, ServerConfig},
 };
-use crate::peer::data_channel::attach_dc;
-use crate::peer::state::{
-    COLLECTING_CANDIDATES, CRYPTO, DISCONNECT_TASK, GRACE_PERIOD, LOCAL_CANDIDATES,
-    USER_ICE_SERVERS,
-};
-use crate::peer::types::IceCandidate;
-use crate::peer::types::ServerConfig;
-use crate::utils::add_ice_url_scheme;
-use std::sync::Arc;
-use tauri::command;
-use tokio::time::sleep;
-use webrtc::ice_transport::ice_candidate::RTCIceCandidate;
-use webrtc::peer_connection::policy::bundle_policy::RTCBundlePolicy;
-use webrtc::peer_connection::policy::rtcp_mux_policy::RTCRtcpMuxPolicy;
+use crate::{errors::AppError, utils::add_ice_url_scheme};
+use std::{sync::Arc, time::Duration};
 use webrtc::{
     api::APIBuilder,
     data_channel::{data_channel_init::RTCDataChannelInit, RTCDataChannel},
@@ -27,251 +15,219 @@ use webrtc::{
     },
 };
 
-/// создаём Peer; если `initiator`, то сами делаем data-channel
-pub async fn new_peer(initiator: bool, connection_id: String) -> Arc<RTCPeerConnection> {
-    let api = APIBuilder::new().build();
-
-    // Получаем пользовательские серверы если они установлены
-    let custom_servers = USER_ICE_SERVERS.lock().unwrap().clone();
-    let config = rtc_config(custom_servers);
-
-    let pc = Arc::new(api.new_peer_connection(config).await.unwrap());
-
-    // Начинаем сбор кандидатов
-    *COLLECTING_CANDIDATES.lock().unwrap() = true;
-    LOCAL_CANDIDATES.lock().unwrap().clear();
-
-    // Обработчик для сбора локальных кандидатов
-    pc.on_ice_candidate(Box::new(move |cand: Option<RTCIceCandidate>| {
-        let conn_id = connection_id.clone();
-        if let Some(c) = cand {
-            tauri::async_runtime::spawn({
-                let c = c.clone();
-                async move {
-                    dump_candidate("LOCAL", &c).await;
-
-                    // Сохраняем кандидат локально
-                    if let Ok(init) = c.to_json() {
-                        let ice_candidate = IceCandidate {
-                            candidate: init.candidate,
-                            sdp_mid: init.sdp_mid,
-                            sdp_mline_index: init.sdp_mline_index,
-                            connection_id: conn_id,
-                        };
-
-                        // Всегда сохраняем кандидат, независимо от флага collecting
-                        LOCAL_CANDIDATES.lock().unwrap().push(ice_candidate);
-                        log(&format!(
-                            "Added ICE candidate, total count: {}",
-                            LOCAL_CANDIDATES.lock().unwrap().len()
-                        ));
-                    }
-                }
-            });
-        } else {
-            // cand == None означает конец сбора
-            log("ICE candidate gathering completed (null candidate received)");
-            *COLLECTING_CANDIDATES.lock().unwrap() = false;
-        }
-        Box::pin(async {})
-    }));
-
-    // Добавляем обработчик ICE gathering state для отладки
-    pc.on_ice_gathering_state_change(Box::new(move |state| {
-        log(&format!("ICE gathering state changed to: {:?}", state));
-        Box::pin(async {})
-    }));
-
-    // делаем копию для обработчика состояний
-    let pc_state = pc.clone();
-
-    pc.on_peer_connection_state_change(Box::new(move |st: RTCPeerConnectionState| {
-        log(&format!("Peer connection state changed to: {:?}", st));
-
-        match st {
-            RTCPeerConnectionState::Connected => {
-                log("Peer connection connected - canceling any pending disconnect task");
-                // отменяем отложенный disconnect, если он был
-                if let Some(handle) = DISCONNECT_TASK.lock().unwrap().take() {
-                    log("Aborting pending disconnect task");
-                    handle.abort();
-                }
-
-                // повторно дёргаем UI, если контекст уже готов
-                let crypto_exists = CRYPTO.lock().unwrap().is_some();
-                if crypto_exists {
-                    log("Crypto context exists - re-emitting connected event");
-                    emit_connection_recovered();
-                    // НЕ отправляем emit_connected() - ждем подтверждения SAS пользователем
-                    log("Crypto context exists but waiting for SAS confirmation");
-                } else {
-                    log("Peer connection connected - waiting for crypto context");
-                }
-            }
-
-            RTCPeerConnectionState::Disconnected | RTCPeerConnectionState::Failed => {
-                log(&format!("Peer connection {:?} - starting grace period", st));
-
-                // уже ожидаем? – ничего не делаем
-                if DISCONNECT_TASK.lock().unwrap().is_some() {
-                    log("Disconnect task already pending, ignoring");
-                    return Box::pin(async {});
-                }
-
-                let pc_stats = pc_state.clone();
-                tauri::async_runtime::spawn(async move {
-                    dump_selected_pair(&pc_stats, "BEFORE-FAIL").await;
-                });
-
-                // Уведомляем о проблемах с подключением
-                emit_connection_problem();
-
-                // ставим отложенную проверку
-                let handle = tauri::async_runtime::spawn({
-                    let pc = pc_state.clone(); // используем копию, а не исходный pc
-                    async move {
-                        log(&format!(
-                            "Grace period started, waiting {} s",
-                            GRACE_PERIOD.as_secs()
-                        ));
-                        emit_connection_recovering();
-                        sleep(GRACE_PERIOD).await;
-
-                        let state_now = pc.connection_state();
-                        let crypto_exists = CRYPTO.lock().unwrap().is_some();
-                        log(&format!(
-                            "Grace over ➜ state={:?}, crypto_exists={}",
-                            state_now, crypto_exists
-                        ));
-
-                        // если соединение так и не восстановилось — отправляем событие неудачного восстановления
-                        if state_now != RTCPeerConnectionState::Connected {
-                            emit_connection_failed();
-                        } else {
-                            log("Connection recovered during grace period");
-                        }
-                    }
-                });
-                *DISCONNECT_TASK.lock().unwrap() = Some(handle);
-            }
-
-            RTCPeerConnectionState::Closed => {
-                log("Peer connection closed - emitting disconnected immediately");
-                // отменяем отложенный disconnect, если он был
-                if let Some(handle) = DISCONNECT_TASK.lock().unwrap().take() {
-                    handle.abort();
-                }
-                emit_disconnected();
-            }
-
-            _ => {
-                log(&format!("Peer connection state: {:?} - ignoring", st));
-            }
-        }
-        Box::pin(async {})
-    }));
-
-    if initiator {
-        let dc = pc
-            .create_data_channel("ssc-data", Some(RTCDataChannelInit::default()))
-            .await
-            .unwrap();
-        attach_dc(&dc);
-    } else {
-        pc.on_data_channel(Box::new(|dc: Arc<RTCDataChannel>| {
-            attach_dc(&dc);
-            Box::pin(async {})
-        }));
-    }
-    pc
-}
-
-/// Создает конфигурацию для peer connection
-fn rtc_config(custom_servers: Option<Vec<ServerConfig>>) -> RTCConfiguration {
-    let ice_servers = if let Some(servers) = custom_servers {
-        // Используем пользовательские серверы
-        get_user_ice_servers(servers)
-    } else {
-        // Используем дефолтные серверы
-        vec![RTCIceServer {
-            urls: vec![
-                "stun:stun.l.google.com:19302".into(),
-                "stun:stun1.l.google.com:19302".into(),
-            ],
-            ..Default::default()
-        }]
-    };
-
+pub fn rtc_config(servers: Option<Vec<ServerConfig>>) -> RTCConfiguration {
     RTCConfiguration {
-        ice_servers,
-        // Добавляем более агрессивные настройки ICE
-        ice_candidate_pool_size: 10,
-        bundle_policy: RTCBundlePolicy::MaxBundle,
-        rtcp_mux_policy: RTCRtcpMuxPolicy::Require,
-        // ice_transport_policy: webrtc::peer_connection::policy::ice_transport_policy::RTCIceTransportPolicy::Relay,
+        ice_servers: servers
+            .unwrap_or_else(default_servers)
+            .into_iter()
+            .map(|s| RTCIceServer {
+                urls: vec![add_ice_url_scheme(&s)],
+                username: s.username.unwrap_or_default(),
+                credential: s.credential.unwrap_or_default(),
+            })
+            .collect(),
         ..Default::default()
     }
 }
-
-/// Получение конфигурации серверов из фронтенда
-pub fn get_user_ice_servers(servers: Vec<ServerConfig>) -> Vec<RTCIceServer> {
-    servers
-        .into_iter()
-        .map(|config| {
-            let url = add_ice_url_scheme(&config);
-
-            RTCIceServer {
-                urls: vec![url],
-                username: config.username.unwrap_or_default(),
-                credential: config.credential.unwrap_or_default(),
+pub async fn new_peer(
+    session: &Arc<Session>,
+    initiator: bool,
+) -> Result<Arc<RTCPeerConnection>, AppError> {
+    let config = rtc_config(lock(&MANAGER).servers.clone());
+    let pc = Arc::new(
+        APIBuilder::new()
+            .build()
+            .new_peer_connection(config)
+            .await
+            .map_err(|_| {
+                AppError::new("peer_create", "ice", "Не удалось создать соединение", true)
+            })?,
+    );
+    if let Err(error) = session.ensure_active() {
+        let _ = pc.close().await;
+        return Err(error);
+    }
+    let installed = {
+        let mut d = lock(&session.data);
+        if d.closed {
+            false
+        } else {
+            d.pc = Some(pc.clone());
+            true
+        }
+    };
+    if !installed {
+        let _ = pc.close().await;
+        return Err(AppError::new(
+            "session_closed",
+            "session",
+            "Сессия завершена",
+            true,
+        ));
+    }
+    session.publish();
+    let weak = Arc::downgrade(session);
+    pc.on_ice_candidate(Box::new(move |candidate| {
+        let weak = weak.clone();
+        Box::pin(async move {
+            if let Some(s) = weak.upgrade() {
+                if !s.active() {
+                    return;
+                }
+                if let Some(candidate) = candidate {
+                    if let Ok(c) = candidate.to_json() {
+                        let mut d = lock(&s.data);
+                        if d.closed {
+                            return;
+                        }
+                        d.candidates.push(IceCandidate {
+                            candidate: c.candidate,
+                            sdp_mid: c.sdp_mid,
+                            sdp_mline_index: c.sdp_mline_index,
+                            connection_id: s.connection_id.clone(),
+                        });
+                    }
+                }
             }
         })
-        .collect()
+    }));
+    let weak = Arc::downgrade(session);
+    pc.on_peer_connection_state_change(Box::new(move |state| {
+        let weak = weak.clone();
+        Box::pin(async move {
+            if let Some(s) = weak.upgrade() {
+                if !s.active() {
+                    return;
+                }
+                match state {
+                    RTCPeerConnectionState::Connected => {
+                        if !s.recovered() {
+                            return;
+                        }
+                        s.publish();
+                        update_route(&s).await;
+                    }
+                    RTCPeerConnectionState::Disconnected | RTCPeerConnectionState::Failed => {
+                        let Some(epoch) = s.start_recovery() else {
+                            return;
+                        };
+                        s.publish();
+                        let weak = Arc::downgrade(&s);
+                        tauri::async_runtime::spawn(async move {
+                            tokio::time::sleep(Duration::from_secs(10)).await;
+                            if let Some(s) = weak.upgrade() {
+                                s.expire_recovery(epoch).await;
+                            }
+                        });
+                    }
+                    RTCPeerConnectionState::Closed => {
+                        s.close_from_callback();
+                    }
+                    _ => {}
+                }
+            }
+        })
+    }));
+    if initiator {
+        let dc = pc
+            .create_data_channel("ssc-v2", Some(RTCDataChannelInit::default()))
+            .await
+            .map_err(|_| {
+                AppError::new(
+                    "channel_create",
+                    "data_channel",
+                    "Не удалось открыть канал",
+                    true,
+                )
+            })?;
+        attach_dc(session, &dc)?;
+    } else {
+        let weak = Arc::downgrade(session);
+        pc.on_data_channel(Box::new(move |dc: Arc<RTCDataChannel>| {
+            let weak = weak.clone();
+            Box::pin(async move {
+                if let Some(s) = weak.upgrade() {
+                    if s.active() {
+                        if let Err(error) = attach_dc(&s, &dc) {
+                            s.error(&error);
+                            s.close_from_callback();
+                        }
+                    } else {
+                        let _ = dc.close().await;
+                    }
+                }
+            })
+        }));
+    }
+    Ok(pc)
 }
-
-/// Устанавливает пользовательские ICE серверы, возвращает true при успехе, false при ошибке
-#[command]
-pub fn set_ice_servers(servers: Vec<ServerConfig>) -> bool {
-    log(&format!("Setting {} custom ICE servers", servers.len()));
-
-    // Валидация серверов
-    for server in &servers {
-        if server.url.is_empty() {
-            log("Server URL cannot be empty");
-            return false;
-        }
-
-        if server.r#type == "turn" && (server.username.is_none() || server.credential.is_none()) {
-            log("TURN servers require username and credential");
-            return false;
+async fn update_route(s: &Arc<Session>) {
+    let pc = lock(&s.data).pc.clone();
+    if let Some(pc) = pc {
+        use webrtc::stats::StatsReportType;
+        let stats = pc.get_stats().await;
+        let pair = stats.reports.values().find_map(|report| match report {
+            StatsReportType::CandidatePair(pair) if pair.nominated => Some(pair),
+            _ => None,
+        });
+        if let Some(pair) = pair {
+            let types: Vec<_> = [&pair.local_candidate_id, &pair.remote_candidate_id]
+                .into_iter()
+                .filter_map(|id| {
+                    stats.reports.get(id).and_then(|report| match report {
+                        StatsReportType::LocalCandidate(c)
+                        | StatsReportType::RemoteCandidate(c) => Some(c.candidate_type.to_string()),
+                        _ => None,
+                    })
+                })
+                .collect();
+            if types.len() == 2 && s.active() {
+                lock(&s.data).route = Some(
+                    if types.iter().any(|t| t == "relay") {
+                        "relay"
+                    } else {
+                        "direct"
+                    }
+                    .into(),
+                );
+                s.publish();
+            }
         }
     }
-
-    *USER_ICE_SERVERS.lock().unwrap() = Some(servers);
-    log("Custom ICE servers set successfully");
-    true
 }
-
-/// Получает пользовательские ICE серверы, возвращает дефолтные серверы если не установлены
-#[command]
+fn default_servers() -> Vec<ServerConfig> {
+    vec![ServerConfig {
+        id: "default-stun".into(),
+        r#type: "stun".into(),
+        url: "stun:stun.l.google.com:19302".into(),
+        username: None,
+        credential: None,
+    }]
+}
+#[tauri::command]
+pub fn set_ice_servers(servers: Vec<ServerConfig>) -> Result<bool, AppError> {
+    for s in &servers {
+        if !matches!(s.r#type.as_str(), "stun" | "turn")
+            || s.url.trim().is_empty()
+            || (s.r#type == "turn"
+                && (s.username.as_ref().is_none_or(|v| v.is_empty())
+                    || s.credential.as_ref().is_none_or(|v| v.is_empty())))
+        {
+            return Err(AppError::new(
+                "ice_config",
+                "ice",
+                "Проверьте адрес и учётные данные сервера",
+                true,
+            ));
+        }
+    }
+    lock(&MANAGER).servers = Some(servers);
+    Ok(true)
+}
+#[tauri::command]
 pub fn get_ice_servers() -> Vec<ServerConfig> {
-    USER_ICE_SERVERS.lock().unwrap().clone().unwrap_or_else(|| {
-        // Возвращаем дефолтные серверы в формате ServerConfig
-        vec![
-            ServerConfig {
-                id: "default-stun".into(),
-                r#type: "stun".into(),
-                url: "stun:stun.l.google.com:19302".into(),
-                username: None,
-                credential: None,
-            },
-            ServerConfig {
-                id: "default-turn".into(),
-                r#type: "turn".into(),
-                url: "stun:stun1.l.google.com:19302".into(),
-                username: None,
-                credential: None,
-            },
-        ]
-    })
+    lock(&MANAGER)
+        .servers
+        .clone()
+        .unwrap_or_else(default_servers)
 }
