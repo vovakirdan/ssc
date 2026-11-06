@@ -1,4 +1,5 @@
 mod commands;
+mod connect;
 mod diagnostics;
 mod errors;
 mod peer;
@@ -12,6 +13,11 @@ pub fn run() {
             commands::candidate_api::generate_offer_with_candidates,
             commands::candidate_api::accept_offer_with_candidates,
             commands::candidate_api::set_answer_with_candidates,
+            connect::create_link_invitation,
+            connect::join_link_invitation,
+            connect::retry_link_invitation,
+            connect::cancel_link_invitation,
+            connect::get_link_state,
             commands::util_api::send_text,
             commands::util_api::get_fingerprint,
             commands::util_api::is_connected,

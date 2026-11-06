@@ -60,7 +60,7 @@ pub(crate) async fn local_bundle(s: &Arc<Session>, offer: bool) -> Result<String
     enc_bundle(&ConnectionBundle {
         sdp_payload: SdpPayload {
             sdp,
-            id: s.connection_id.clone(),
+            id: s.connection_id(),
             ts: chrono::Utc::now().timestamp(),
         },
         ice_candidates: candidates,
@@ -123,14 +123,17 @@ pub async fn set_answer_with_candidates(encoded: String) -> Result<bool, AppErro
     let bundle = decode_checked(&encoded, RTCSdpType::Answer)?;
     let s = state::current()?;
     s.ensure_active()?;
-    if bundle.sdp_payload.id != s.connection_id {
+    if bundle.sdp_payload.id != s.connection_id() {
         return Err(err("session_mismatch"));
     }
     let result = remote(&s, bundle).await.map(|_| true);
     finish(&s, result).await
 }
 
-fn decode_checked(encoded: &str, kind: RTCSdpType) -> Result<ConnectionBundle, AppError> {
+pub(crate) fn decode_checked(
+    encoded: &str,
+    kind: RTCSdpType,
+) -> Result<ConnectionBundle, AppError> {
     let result = dec_bundle(encoded.trim()).and_then(|b| {
         validate(&b, kind)?;
         Ok(b)

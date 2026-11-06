@@ -44,6 +44,7 @@ pub struct Snapshot {
 type Resources = (Option<Arc<RTCDataChannel>>, Option<Arc<RTCPeerConnection>>);
 
 pub struct SessionData {
+    pub connection_id: String,
     pub pc: Option<Arc<RTCPeerConnection>>,
     pub dc: Option<Arc<RTCDataChannel>>,
     pub exchange: Option<KeyExchange>,
@@ -62,21 +63,24 @@ pub struct SessionData {
 }
 pub struct Session {
     pub generation: u64,
-    pub connection_id: String,
     pub data: Mutex<SessionData>,
     pub sending: tokio::sync::Mutex<()>,
     events: Mutex<()>,
     pub app: Option<AppHandle>,
+    pub link: Mutex<Option<crate::connect::Operation>>,
+    stopped: tokio::sync::watch::Sender<bool>,
 }
 impl Session {
     pub fn new(generation: u64, connection_id: String, app: Option<AppHandle>) -> Arc<Self> {
         Arc::new(Self {
             generation,
-            connection_id,
             app,
+            link: Mutex::new(None),
+            stopped: tokio::sync::watch::channel(false).0,
             sending: tokio::sync::Mutex::new(()),
             events: Mutex::new(()),
             data: Mutex::new(SessionData {
+                connection_id,
                 pc: None,
                 dc: None,
                 exchange: None,
@@ -94,6 +98,26 @@ impl Session {
                 next_message_id: 0,
             }),
         })
+    }
+    pub fn connection_id(&self) -> String {
+        lock(&self.data).connection_id.clone()
+    }
+    pub fn set_connection_id(&self, id: String) -> Result<(), AppError> {
+        let mut d = lock(&self.data);
+        if d.closed || d.pc.is_some() {
+            return Err(AppError::new(
+                "session_changed",
+                "session",
+                "Подключение уже изменилось",
+                false,
+            ));
+        }
+        d.connection_id = id;
+        Ok(())
+    }
+    pub async fn stopped(&self) {
+        let mut stopped = self.stopped.subscribe();
+        let _ = stopped.wait_for(|v| *v).await;
     }
     pub fn start_recovery(&self) -> Option<u64> {
         let mut d = lock(&self.data);
@@ -176,8 +200,13 @@ impl Session {
             "state",
             None,
         );
+        let connected = snapshot.phase == Phase::Connected;
         if let Some(app) = &self.app {
             let _ = app.emit("ssc-session", snapshot);
+        }
+        drop(_events);
+        if connected {
+            crate::connect::connected(self);
         }
     }
     pub fn error(&self, error: &AppError) {
@@ -209,7 +238,11 @@ impl Session {
         d.peer_ready = false;
         d.candidates.clear();
         d.inbox.clear();
-        Some((d.dc.take(), d.pc.take()))
+        let resources = (d.dc.take(), d.pc.take());
+        drop(d);
+        self.stopped.send_replace(true);
+        crate::connect::retire(self);
+        Some(resources)
     }
     pub async fn close(&self) {
         if let Some(resources) = self.retire(None) {

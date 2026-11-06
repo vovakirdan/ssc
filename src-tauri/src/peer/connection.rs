@@ -80,11 +80,12 @@ pub async fn new_peer(
                         if d.closed {
                             return;
                         }
+                        let connection_id = d.connection_id.clone();
                         d.candidates.push(IceCandidate {
                             candidate: c.candidate,
                             sdp_mid: c.sdp_mid,
                             sdp_mline_index: c.sdp_mline_index,
-                            connection_id: s.connection_id.clone(),
+                            connection_id,
                         });
                     }
                 }
