@@ -11,8 +11,9 @@ import Chat from './Chat';
 import VerifyFingerprint from './VerifyFingerprint';
 import ConnectionHub from './ConnectionHub';
 import Settings from './Settings';
+import LinkConnection from './LinkConnection';
 
-type AppMode = 'welcome' | 'generate' | 'scan' | 'verify' | 'chat' | 'settings';
+type AppMode = 'welcome' | 'generate' | 'scan' | 'verify' | 'chat' | 'settings' | 'link';
 
 const IndexContent = () => {
   const { error: connectionError } = useSession();
@@ -147,12 +148,16 @@ const IndexContent = () => {
     return <GenerateQR onBack={handleBack} onConnected={handleConnected} autoGenerate={true} ttl={ttl} />;
   }
 
+  if (mode === 'link') {
+    return <LinkConnection ttl={ttl} onBack={() => { setMode('welcome'); setShowOptions(false); loadTTL(); }} />;
+  }
+
   if (mode === 'scan') {
     return <ScanQR onBack={handleBack} onConnected={handleConnected} />;
   }
 
   if (showOptions) {
-    return <ConnectionHub onCreate={handleGenerate} onJoin={() => { if (preferencesReady) setMode('scan'); }} onBack={handleBack} />;
+    return <ConnectionHub onCreate={handleGenerate} onJoin={() => { if (preferencesReady) setMode('scan'); }} onBack={handleBack} onLink={() => { if (preferencesReady) { loadTTL(); setMode('link'); } }} />;
   }
 
   return <>{preferencesError && <p role="alert" className="fixed top-0 left-0 right-0 bg-red-950 text-white p-3 z-40">{preferencesError}</p>}<Welcome onStart={handleStart} onSettings={handleSettings} /></>;

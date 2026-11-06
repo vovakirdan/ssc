@@ -81,10 +81,10 @@ The Rust suite includes actual localhost DTLS/SCTP peers and the production invi
 key-exchange, readiness and message paths. React tests mock Tauri and do not establish a
 real connection. Desktop checks run on pull requests; local results are not hosted CI proof.
 
-For native WebView smoke testing, start Vite on port 1420 and two `tauri-driver` instances on
+For native WebView smoke testing, build a release executable and start two `tauri-driver` instances on
 ports 4444/4445, with native WebKitWebDriver ports 4446/4447. Use separate Xvfb displays in a
 headless environment. Then run `node scripts/native-smoke.mjs`. `SSC_BINARY` can override
-the default debug binary path. The smoke test starts two application windows, exchanges
+the default release binary path. The smoke test starts two application windows, exchanges
 manual invitations through real IPC, compares SAS, confirms through UI controls, sends a
 message through the UI, verifies report redaction and checks history cleanup. It uses no
 external ICE servers and therefore does not validate TURN or arbitrary NAT traversal.
@@ -92,3 +92,5 @@ external ICE servers and therefore does not validate TURN or arbitrary NAT trave
 Before release, additionally verify forced TURN routing on a real server, reconnect after
 a network interruption, and platform-specific Windows/macOS builds. These require separate
 evidence from the localhost tests.
+
+Short-link pairing and its local native check are described in [connection screens](CONNECTION_SCREENS.md#короткая-ссылка). The WebRTC v2 wire format is unchanged.

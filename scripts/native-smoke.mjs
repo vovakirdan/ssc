@@ -2,47 +2,7 @@
 import { resolve } from 'node:path';
 
 const sessions = [];
-async function request(url, body, method = 'POST') {
-  const response = await fetch(url, {
-    method, headers: { 'content-type': 'application/json' },
-    ...(body ? { body: JSON.stringify(body) } : {}),
-  }).then(result => result.json());
-  if (response.value?.error) throw new Error(`${response.value.error}: ${response.value.message}`);
-  return response.value;
-}
-function execute(peer, script, args = []) {
-  return request(`${peer.url}/execute/sync`, { script, args });
-}
-async function ipc(peer, command, args = {}) {
-  const response = await request(`${peer.url}/execute/async`, {
-    script: `const done=arguments[arguments.length-1];
-      window.__TAURI_INTERNALS__.invoke(arguments[0],arguments[1]).then(
-        value=>done({ok:true,value}),error=>done({ok:false,error}));`,
-    args: [command, args],
-  });
-  if (!response.ok) throw new Error(JSON.stringify(response.error));
-  return response.value;
-}
-async function until(predicate, description) {
-  for (let attempt = 0; attempt < 200; attempt++) {
-    if (await predicate()) return;
-    await new Promise(resolve => setTimeout(resolve, 100));
-  }
-  throw new Error(`Timed out: ${description}`);
-}
-function click(peer, text) {
-  return execute(peer, `const button=Array.from(document.querySelectorAll('button')).find(
-    button=>button.textContent.includes(arguments[0]));
-    if(!button||button.disabled)throw Error('Missing or disabled button');button.click();`, [text]);
-}
-function input(peer, selector, value) {
-  return execute(peer, `const element=document.querySelector(arguments[0]);
-    Object.getOwnPropertyDescriptor(Object.getPrototypeOf(element),'value').set.call(element,arguments[1]);
-    element.dispatchEvent(new Event('input',{bubbles:true}));`, [selector, value]);
-}
-async function visible(peer, text) {
-  return execute(peer, 'return document.body.innerText.includes(arguments[0])', [text]);
-}
+import { request, execute, ipc, until, click, input, visible } from './webdriver.mjs';
 async function connect([alice, bob]) {
   for (const peer of [alice, bob]) await click(peer, 'Начать чат');
   await click(alice, 'Создать приглашение');
@@ -75,7 +35,7 @@ try {
   for (const port of [4444, 4445]) {
     const result = await request(`http://127.0.0.1:${port}/session`, {
       capabilities: { alwaysMatch: { 'tauri:options': {
-        application: process.env.SSC_BINARY || resolve('src-tauri/target/debug/ssc'),
+        application: process.env.SSC_BINARY || resolve('src-tauri/target/release/ssc'),
       } } },
     });
     sessions.push({ url: `http://127.0.0.1:${port}/session/${result.sessionId}` });

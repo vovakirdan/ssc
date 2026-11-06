@@ -1,17 +1,23 @@
 import { ArrowLeft, ArrowRight, Link2, QrCode, ScanLine, ShieldCheck } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
-interface Props { onCreate: () => void; onJoin: () => void; onBack: () => void }
+interface Props { onCreate: () => void; onJoin: () => void; onBack: () => void; onLink: () => void }
 
-export default function ConnectionHub({ onCreate, onJoin, onBack }: Props) {
+export default function ConnectionHub({ onCreate, onJoin, onBack, onLink }: Props) {
   return <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-800 text-white p-5 sm:p-8">
     <main className="max-w-2xl mx-auto space-y-7">
       <Button variant="ghost" onClick={onBack} className="text-slate-300 -ml-3"><ArrowLeft className="w-4 h-4 mr-2" />Назад</Button>
       <header className="space-y-3">
         <p className="text-emerald-400 text-xs uppercase tracking-[0.2em]">Новое подключение</p>
         <h1 className="text-3xl sm:text-4xl font-semibold tracking-tight">Пригласите своего человека</h1>
-        <p className="text-slate-400 leading-relaxed">Один создаёт приглашение, второй присылает ответ. Перед началом чата вы сверите код на обоих устройствах.</p>
+        <p className="text-slate-400 leading-relaxed">Поделитесь короткой ссылкой или обменяйтесь кодами вручную. Перед началом чата вы сверите код на обоих устройствах.</p>
       </header>
+      <button onClick={onLink} aria-label="Подключиться по короткой ссылке" className="w-full rounded-2xl border border-cyan-800/60 bg-cyan-950/20 hover:bg-cyan-950/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 p-5 flex items-start gap-4 text-left transition-colors">
+        <Link2 className="w-5 h-5 text-cyan-400 mt-1 flex-shrink-0" />
+        <div className="flex-1"><h2 className="text-slate-100 font-medium">По короткой ссылке</h2><p className="text-sm text-slate-400 mt-1">Создайте ссылку или вставьте полученную. Приложения обменяются ответом автоматически.</p></div>
+        <ArrowRight className="w-5 h-5 text-cyan-400 mt-1 flex-shrink-0" />
+      </button>
+      <p className="text-sm text-slate-400">Или вручную — QR и коды</p>
       <div className="grid sm:grid-cols-2 gap-4">
         <button onClick={onCreate} className="group text-left rounded-2xl border border-emerald-700/60 bg-emerald-950/30 hover:bg-emerald-950/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 p-6 transition-colors">
           <QrCode className="w-7 h-7 text-emerald-400 mb-6" />
@@ -27,13 +33,6 @@ export default function ConnectionHub({ onCreate, onJoin, onBack }: Props) {
           <p className="text-slate-400 text-sm leading-relaxed">Вставьте полученный код или загрузите изображение QR.</p>
           <ArrowRight className="w-5 h-5 mt-5 text-slate-400 group-hover:translate-x-1 transition-transform" />
         </button>
-      </div>
-      <div className="rounded-2xl border border-slate-800 bg-slate-900/50 p-5 flex items-start gap-4">
-        <Link2 className="w-5 h-5 text-slate-500 mt-1 flex-shrink-0" />
-        <div className="flex-1"><div className="flex items-center gap-3"><h2 className="text-slate-300 font-medium">По короткой ссылке</h2><span className="text-xs rounded-full border border-slate-700 px-2 py-0.5 text-slate-500">Скоро</span></div>
-          <p className="text-sm text-slate-500 mt-1">Сервис ещё не подключён. Пока используйте ручной обмен кодами.</p>
-        </div>
-        <button disabled aria-label="Подключиться по короткой ссылке" className="text-slate-600 cursor-not-allowed"><ArrowRight className="w-5 h-5" /></button>
       </div>
       <p className="flex gap-2 text-xs text-slate-500 leading-relaxed"><ShieldCheck className="w-4 h-4 flex-shrink-0" />Передавайте приглашение и ответ только тому человеку, с которым хотите общаться.</p>
     </main>
