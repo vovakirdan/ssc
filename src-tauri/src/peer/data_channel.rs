@@ -1,17 +1,15 @@
 use super::{
-    crypto::KeyExchange,
+    handshake::{self, Handshake},
     protocol::{KIND_CHUNK, KIND_READY},
-    state::{lock, Phase, Session},
+    state::{lock, Phase, Session, Verification},
 };
 use crate::errors::AppError;
 use bytes::Bytes;
 use std::sync::Arc;
-use webrtc::data_channel::{data_channel_state::RTCDataChannelState, RTCDataChannel};
+use webrtc::data_channel::RTCDataChannel;
 
 pub fn attach_dc(s: &Arc<Session>, dc: &Arc<RTCDataChannel>) -> Result<(), AppError> {
     s.ensure_active()?;
-    let exchange = KeyExchange::new()?;
-    let public = exchange.public_key();
     {
         let mut d = lock(&s.data);
         if d.closed {
@@ -30,37 +28,34 @@ pub fn attach_dc(s: &Arc<Session>, dc: &Arc<RTCDataChannel>) -> Result<(), AppEr
                 false,
             ));
         }
-        d.exchange = Some(exchange);
+        let role = d.role.ok_or_else(|| {
+            AppError::new(
+                "role_required",
+                "key_exchange",
+                "Не определена роль подключения",
+                false,
+            )
+        })?;
+        d.exchange = Some(Handshake::new(&d.connection_id, role)?);
         d.dc = Some(dc.clone());
     }
     let weak = Arc::downgrade(s);
-    let weak_dc = Arc::downgrade(dc);
     dc.on_open(Box::new(move || {
         let weak = weak.clone();
-        let weak_dc = weak_dc.clone();
         Box::pin(async move {
-            if let (Some(s), Some(dc)) = (weak.upgrade(), weak_dc.upgrade()) {
-                if !s.active() {
-                    return;
+            if let Some(s) = weak.upgrade() {
+                {
+                    let mut d = lock(&s.data);
+                    if d.closed {
+                        return;
+                    }
+                    d.dc_open = true;
                 }
-                let mut hello = vec![2, 0];
-                hello.extend_from_slice(&public);
-                if dc.send(&Bytes::from(hello)).await.is_err() {
-                    s.error(&AppError::new(
-                        "key_send",
-                        "key_exchange",
-                        "Не удалось отправить публичный ключ",
-                        true,
-                    ));
+                s.start_handshake_timeout();
+                if let Err(error) = start_handshake(&s).await {
+                    s.error(&error);
                     s.close_from_callback();
                 } else {
-                    crate::diagnostics::record(
-                        s.generation,
-                        "crypto",
-                        "key_exchange",
-                        "key_sent",
-                        None,
-                    );
                     s.publish();
                 }
             }
@@ -74,7 +69,12 @@ pub fn attach_dc(s: &Arc<Session>, dc: &Arc<RTCDataChannel>) -> Result<(), AppEr
                 if !s.active() {
                     return;
                 }
-                if let Err(error) = receive(&s, &msg.data) {
+                let result = if handshake::is_handshake(&msg.data) {
+                    receive_handshake(&s, &msg.data).await
+                } else {
+                    receive(&s, &msg.data)
+                };
+                if let Err(error) = result {
                     s.error(&error);
                     s.close_from_callback();
                 }
@@ -94,46 +94,92 @@ pub fn attach_dc(s: &Arc<Session>, dc: &Arc<RTCDataChannel>) -> Result<(), AppEr
     }));
     Ok(())
 }
-pub(super) fn receive(s: &Arc<Session>, bytes: &[u8]) -> Result<(), AppError> {
-    if bytes.starts_with(&[2, 0]) {
-        if bytes.len() != 34 {
-            return Err(AppError::new(
-                "key_length",
+
+async fn send_handshake(s: &Arc<Session>, frames: Vec<Vec<u8>>) -> Result<(), AppError> {
+    for frame in frames {
+        s.ensure_active()?;
+        let dc = lock(&s.data).dc.clone().ok_or_else(|| {
+            AppError::new("channel_closed", "key_exchange", "Канал недоступен", true)
+        })?;
+        dc.send(&Bytes::from(frame)).await.map_err(|_| {
+            AppError::new(
+                "key_send",
                 "key_exchange",
-                "Некорректный публичный ключ",
+                "Не удалось передать обмен ключами",
+                true,
+            )
+        })?;
+    }
+    s.ensure_active()
+}
+
+async fn start_handshake(s: &Arc<Session>) -> Result<(), AppError> {
+    let _sending = s.sending.lock().await;
+    s.ensure_active()?;
+    let frames = lock(&s.data)
+        .exchange
+        .as_mut()
+        .ok_or_else(|| {
+            AppError::new(
+                "key_required",
+                "key_exchange",
+                "Нет состояния обмена ключами",
                 false,
+            )
+        })?
+        .start()?;
+    send_handshake(s, frames).await
+}
+
+pub(super) async fn receive_handshake(s: &Arc<Session>, bytes: &[u8]) -> Result<(), AppError> {
+    // A peer commitment can arrive concurrently with on_open. This guard keeps our
+    // commitment on the reliable ordered channel ahead of our reveal.
+    let _sending = s.sending.lock().await;
+    s.ensure_active()?;
+    let (frames, verification) = {
+        let mut d = lock(&s.data);
+        if d.closed {
+            return Err(AppError::new(
+                "session_closed",
+                "session",
+                "Сессия завершена",
+                true,
             ));
         }
-        let peer = <[u8; 32]>::try_from(&bytes[2..])
-            .map_err(|_| AppError::new("key_length", "key_exchange", "Некорректный ключ", false));
-        let peer = peer?;
-        let sas = {
-            let mut d = lock(&s.data);
-            if d.closed {
-                return Err(AppError::new(
-                    "session_closed",
-                    "session",
-                    "Сессия завершена",
-                    true,
-                ));
-            }
-            let exchange = d.exchange.take().ok_or_else(|| {
+        let step = d
+            .exchange
+            .as_mut()
+            .ok_or_else(|| {
                 AppError::new(
-                    "duplicate_key",
+                    "duplicate_handshake",
                     "key_exchange",
                     "Повторный обмен ключами",
                     false,
                 )
-            })?;
-            let crypto = exchange.finish(peer)?;
-            let sas = crypto.sas.clone();
+            })?
+            .receive(bytes)?;
+        let verification = if let Some(crypto) = step.crypto {
+            let verification = Verification {
+                generation: s.generation,
+                sas: crypto.sas.clone(),
+            };
             d.crypto = Some(crypto);
-            sas
+            d.exchange = None;
+            Some(verification)
+        } else {
+            None
         };
-        s.emit("ssc-sas", sas);
-        s.publish();
-        return Ok(());
+        (step.outgoing, verification)
+    };
+    send_handshake(s, frames).await?;
+    if let Some(verification) = verification {
+        s.emit("ssc-sas", verification);
     }
+    s.publish();
+    Ok(())
+}
+
+pub(super) fn receive(s: &Arc<Session>, bytes: &[u8]) -> Result<(), AppError> {
     let message = {
         let mut d = lock(&s.data);
         if d.closed {
@@ -230,12 +276,9 @@ pub async fn send_encrypted(s: &Arc<Session>, kind: u8, payload: &[u8]) -> Resul
     s.ensure_active()?;
     let (dc, frame) = {
         let mut d = lock(&s.data);
-        let dc =
-            d.dc.clone()
-                .filter(|dc| dc.ready_state() == RTCDataChannelState::Open)
-                .ok_or_else(|| {
-                    AppError::new("channel_closed", "data_channel", "Канал недоступен", true)
-                })?;
+        let dc = d.dc.clone().filter(|_| d.dc_open).ok_or_else(|| {
+            AppError::new("channel_closed", "data_channel", "Канал недоступен", true)
+        })?;
         let crypto = d
             .crypto
             .as_mut()
@@ -252,12 +295,13 @@ pub async fn send_encrypted(s: &Arc<Session>, kind: u8, payload: &[u8]) -> Resul
     })?;
     s.ensure_active()
 }
-pub async fn confirm(s: &Arc<Session>) -> Result<bool, AppError> {
+pub async fn confirm(
+    s: &Arc<Session>,
+    generation: u64,
+    expected_sas: &str,
+) -> Result<bool, AppError> {
     let _sending = s.sending.lock().await;
     s.ensure_active()?;
-    if lock(&s.data).local_ready {
-        return Ok(true);
-    }
     {
         let mut d = lock(&s.data);
         if d.closed {
@@ -267,6 +311,21 @@ pub async fn confirm(s: &Arc<Session>) -> Result<bool, AppError> {
                 "Сессия завершена",
                 true,
             ));
+        }
+        if s.generation != generation
+            || d.crypto
+                .as_ref()
+                .is_none_or(|crypto| crypto.sas != expected_sas)
+        {
+            return Err(AppError::new(
+                "verification_stale",
+                "verification",
+                "Код или подключение изменились; повторите сверку",
+                true,
+            ));
+        }
+        if d.local_ready {
+            return Ok(true);
         }
         d.local_ready = true;
     }

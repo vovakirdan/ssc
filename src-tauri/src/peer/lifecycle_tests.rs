@@ -1,6 +1,7 @@
 use super::{
     crypto::{CryptoCtx, KeyExchange},
-    data_channel::{confirm, receive},
+    data_channel::{confirm, receive, receive_handshake},
+    handshake::{Handshake, Role},
     protocol::{chunks, KIND_CHUNK, KIND_READY},
     state::{lock, Phase, ReceivedMessage, Session},
 };
@@ -12,25 +13,29 @@ fn keyed_session(generation: u64) -> (Arc<Session>, CryptoCtx) {
     let peer = KeyExchange::new().unwrap();
     let local_public = local.public_key();
     let peer_public = peer.public_key();
-    lock(&session.data).crypto = Some(local.finish(peer_public).unwrap());
-    (session, peer.finish(local_public).unwrap())
+    lock(&session.data).crypto = Some(local.finish(peer_public, &[7; 32], true).unwrap());
+    (session, peer.finish(local_public, &[7; 32], false).unwrap())
 }
 
-fn hello(public_key: [u8; 32]) -> Vec<u8> {
-    let mut frame = vec![2, 0];
-    frame.extend_from_slice(&public_key);
-    frame
+fn commitment() -> Vec<u8> {
+    Handshake::new("closed-handshake", Role::Responder)
+        .unwrap()
+        .start()
+        .unwrap()
+        .remove(0)
 }
 
 #[tokio::test]
 async fn late_key_callback_after_close_cannot_restore_secrets() {
     let session = Session::new(201, "closed-handshake".into(), None);
-    lock(&session.data).exchange = Some(KeyExchange::new().unwrap());
-    let peer = KeyExchange::new().unwrap();
-    let callback_bytes = hello(peer.public_key());
+    lock(&session.data).exchange =
+        Some(Handshake::new("closed-handshake", Role::Initiator).unwrap());
+    let callback_bytes = commitment();
     session.close().await;
 
-    let error = receive(&session, &callback_bytes).unwrap_err();
+    let error = receive_handshake(&session, &callback_bytes)
+        .await
+        .unwrap_err();
     assert_eq!(error.code, "session_closed");
     assert_eq!(session.snapshot().phase, Phase::Closed);
     let data = lock(&session.data);
@@ -51,7 +56,13 @@ async fn retired_callbacks_cannot_change_replacement_session() {
         receive(&retired, &delayed_ready).unwrap_err().code,
         "session_closed"
     );
-    assert_eq!(confirm(&retired).await.unwrap_err().code, "session_closed");
+    assert_eq!(
+        confirm(&retired, retired.generation, "old")
+            .await
+            .unwrap_err()
+            .code,
+        "session_closed"
+    );
     retired.close().await;
 
     assert_eq!(replacement.snapshot().phase, Phase::Verification);
@@ -63,12 +74,15 @@ async fn retired_callbacks_cannot_change_replacement_session() {
 }
 
 #[tokio::test]
-async fn invalid_key_callback_can_be_closed_without_retaining_key_exchange() {
+async fn invalid_handshake_callback_can_be_closed_without_retaining_key_exchange() {
     let session = Session::new(204, "invalid-key".into(), None);
-    lock(&session.data).exchange = Some(KeyExchange::new().unwrap());
+    lock(&session.data).exchange = Some(Handshake::new("invalid-key", Role::Initiator).unwrap());
     assert_eq!(
-        receive(&session, &hello([0; 32])).unwrap_err().code,
-        "invalid_key"
+        receive_handshake(&session, &[super::crypto::VERSION, 0, 1])
+            .await
+            .unwrap_err()
+            .code,
+        "commitment_length"
     );
     // The production callback closes the session on any receive error.
     session.close().await;
@@ -152,4 +166,41 @@ async fn recovered_session_survives_late_expiry_and_current_expiry_cleans_up() {
     s.expire_recovery(epoch).await;
     assert!(!s.active());
     assert!(s.snapshot().phase == Phase::Closed);
+}
+
+#[tokio::test]
+async fn stale_confirmation_cannot_enable_or_close_the_current_session() {
+    let (session, _) = keyed_session(210);
+    let sas = lock(&session.data).crypto.as_ref().unwrap().sas.clone();
+    for (generation, code) in [(209, sas.as_str()), (210, "different")] {
+        assert_eq!(
+            confirm(&session, generation, code).await.unwrap_err().code,
+            "verification_stale"
+        );
+        assert!(!lock(&session.data).local_ready);
+        assert!(session.active());
+    }
+    lock(&session.data).local_ready = true;
+    // Validate even repeated confirmations, before the idempotent success path.
+    assert_eq!(
+        confirm(&session, 209, &sas).await.unwrap_err().code,
+        "verification_stale"
+    );
+    assert!(confirm(&session, 210, &sas).await.unwrap());
+}
+
+#[tokio::test]
+async fn handshake_deadline_excludes_manual_signaling_and_human_verification() {
+    let waiting = Session::new(211, "manual".into(), None);
+    waiting.expire_handshake();
+    assert!(waiting.active());
+    waiting.start_handshake_timeout();
+    waiting.expire_handshake();
+    assert!(!waiting.active());
+    let (verified_keys, _) = keyed_session(212);
+    lock(&verified_keys.data).handshake_started = true;
+    verified_keys.expire_handshake();
+    assert_eq!(verified_keys.snapshot().phase, Phase::Verification);
+    assert!(verified_keys.active());
+    verified_keys.close().await;
 }

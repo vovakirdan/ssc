@@ -1,0 +1,55 @@
+name: Desktop security and regression checks
+
+on:
+  push:
+    branches: [main, dev, feature/connection-helper]
+  pull_request:
+    branches: [main, dev]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-security-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  desktop:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install desktop libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+      - name: Set up Rust
+        run: |
+          rustup update stable --no-self-update
+          rustup default stable
+          rustup component add rustfmt clippy
+      - name: Frontend and dependency audit
+        run: |
+          npm ci
+          npm audit
+          npm run lint
+          npm test
+          node --test scripts/webdriver.test.mjs
+          npm run build
+      - name: Rust regression checks
+        run: |
+          cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+          cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings
+          cargo test --manifest-path src-tauri/Cargo.toml --locked --lib
+          CARGO_TARGET_DIR="$RUNNER_TEMP/dtls-target" cargo test --manifest-path src-tauri/vendor/webrtc-dtls/Cargo.toml --locked --lib
+      - name: Rust dependency audit
+        run: |
+          cargo install cargo-audit --version 0.22.2 --locked
+          cargo audit --file src-tauri/Cargo.lock
+          cargo audit --file src-tauri/vendor/webrtc-dtls/Cargo.lock

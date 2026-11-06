@@ -2,7 +2,7 @@ use crate::{
     errors::AppError,
     peer::{
         data_channel,
-        state::{self, lock, Phase, Snapshot},
+        state::{self, lock, Phase, Snapshot, Verification},
     },
 };
 use tauri::command;
@@ -19,26 +19,35 @@ pub async fn send_text(text: String) -> Result<bool, AppError> {
     result
 }
 #[command]
-pub async fn confirm_sas() -> Result<bool, AppError> {
+pub async fn confirm_sas(generation: u64, sas: String) -> Result<bool, AppError> {
     let s = state::current()?;
-    let result = data_channel::confirm(&s).await;
+    let result = data_channel::confirm(&s, generation, &sas).await;
     if let Err(error) = &result {
-        s.error(error);
-        s.close().await;
+        if error.code != "verification_stale" {
+            s.error(error);
+            s.close().await;
+        }
     }
     result
 }
 #[command]
-pub async fn reject_sas() {
-    disconnect().await;
+pub async fn reject_sas(generation: u64) {
+    if let Ok(s) = state::current() {
+        if s.generation == generation {
+            s.close().await;
+        }
+    }
 }
 #[command]
-pub fn get_fingerprint() -> Option<String> {
+pub fn get_fingerprint() -> Option<Verification> {
     let s = state::current().ok()?;
     if !s.active() {
         return None;
     }
-    let result = lock(&s.data).crypto.as_ref().map(|c| c.sas.clone());
+    let result = lock(&s.data).crypto.as_ref().map(|c| Verification {
+        generation: s.generation,
+        sas: c.sas.clone(),
+    });
     result
 }
 #[command]

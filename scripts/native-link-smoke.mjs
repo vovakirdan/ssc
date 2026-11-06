@@ -55,8 +55,9 @@ async function createLink(peer) {
 }
 async function confirmPair() {
   for (const peer of sessions) await until(() => visible(peer, 'Я вижу одинаковый код'), 'SAS verification');
-  const sas = await ipc(sessions[0], 'get_fingerprint');
-  if (!sas || sas !== await ipc(sessions[1], 'get_fingerprint')) throw new Error('SAS mismatch');
+  const verification = await ipc(sessions[0], 'get_fingerprint');
+  const sas = verification?.sas;
+  if (!sas || sas !== (await ipc(sessions[1], 'get_fingerprint'))?.sas) throw new Error('SAS mismatch');
   secrets.push(sas);
   await execute(sessions[0], 'document.querySelector("input[type=checkbox]").click()');
   await click(sessions[0], 'Коды совпадают');

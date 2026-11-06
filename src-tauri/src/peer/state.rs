@@ -1,5 +1,6 @@
 use super::{
-    crypto::{CryptoCtx, KeyExchange},
+    crypto::CryptoCtx,
+    handshake::{Handshake, Role},
     protocol::Reassembler,
     types::{IceCandidate, ServerConfig},
 };
@@ -41,13 +42,22 @@ pub struct Snapshot {
     pub route: Option<String>,
 }
 
+#[derive(Clone, Serialize)]
+pub struct Verification {
+    pub generation: u64,
+    pub sas: String,
+}
+
 type Resources = (Option<Arc<RTCDataChannel>>, Option<Arc<RTCPeerConnection>>);
 
 pub struct SessionData {
     pub connection_id: String,
     pub pc: Option<Arc<RTCPeerConnection>>,
     pub dc: Option<Arc<RTCDataChannel>>,
-    pub exchange: Option<KeyExchange>,
+    pub dc_open: bool,
+    pub exchange: Option<Handshake>,
+    pub role: Option<Role>,
+    pub handshake_started: bool,
     pub crypto: Option<CryptoCtx>,
     pub local_ready: bool,
     pub peer_ready: bool,
@@ -83,7 +93,10 @@ impl Session {
                 connection_id,
                 pc: None,
                 dc: None,
+                dc_open: false,
                 exchange: None,
+                role: None,
+                handshake_started: false,
                 crypto: None,
                 local_ready: false,
                 peer_ready: false,
@@ -138,6 +151,37 @@ impl Session {
         d.recovering = false;
         d.recovery_epoch += 1;
         true
+    }
+    pub fn start_handshake_timeout(self: &Arc<Self>) {
+        {
+            let mut d = lock(&self.data);
+            if d.closed || d.crypto.is_some() || d.handshake_started {
+                return;
+            }
+            d.handshake_started = true;
+        }
+        let weak = Arc::downgrade(self);
+        tauri::async_runtime::spawn(async move {
+            if let Some(s) = weak.upgrade() {
+                tokio::select! {
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(20)) => s.expire_handshake(),
+                    _ = s.stopped() => {}
+                }
+            }
+        });
+    }
+    pub fn expire_handshake(&self) {
+        if let Some(resources) = self.retire(None, true) {
+            crate::diagnostics::record(
+                self.generation,
+                "crypto",
+                "key_exchange",
+                "error",
+                Some("handshake_timeout"),
+            );
+            self.publish();
+            tauri::async_runtime::spawn(shutdown(resources));
+        }
     }
     pub fn snapshot(&self) -> Snapshot {
         let d = lock(&self.data);
@@ -222,10 +266,11 @@ impl Session {
             serde_json::json!({"generation":self.generation,"error":error}),
         );
     }
-    fn retire(&self, expected_epoch: Option<u64>) -> Option<Resources> {
+    fn retire(&self, expected_epoch: Option<u64>, handshake_only: bool) -> Option<Resources> {
         let mut d = lock(&self.data);
         if d.closed
             || expected_epoch.is_some_and(|epoch| !d.recovering || d.recovery_epoch != epoch)
+            || (handshake_only && (!d.handshake_started || d.crypto.is_some()))
         {
             return None;
         }
@@ -233,6 +278,8 @@ impl Session {
         d.recovery_epoch += 1;
         d.crypto = None;
         d.exchange = None;
+        d.role = None;
+        d.dc_open = false;
         d.reassembler = Reassembler::default();
         d.local_ready = false;
         d.peer_ready = false;
@@ -245,13 +292,13 @@ impl Session {
         Some(resources)
     }
     pub async fn close(&self) {
-        if let Some(resources) = self.retire(None) {
+        if let Some(resources) = self.retire(None, false) {
             self.publish();
             shutdown(resources).await;
         }
     }
     pub async fn expire_recovery(&self, epoch: u64) {
-        if let Some(resources) = self.retire(Some(epoch)) {
+        if let Some(resources) = self.retire(Some(epoch), false) {
             crate::diagnostics::record(
                 self.generation,
                 "network",
@@ -265,7 +312,7 @@ impl Session {
     }
     pub fn close_from_callback(&self) {
         // Transport callbacks must not wait for the transport's own receive/state tasks.
-        if let Some(resources) = self.retire(None) {
+        if let Some(resources) = self.retire(None, false) {
             self.publish();
             tauri::async_runtime::spawn(shutdown(resources));
         }

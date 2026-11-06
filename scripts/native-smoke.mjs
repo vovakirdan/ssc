@@ -5,6 +5,9 @@ const sessions = [];
 import { request, execute, ipc, until, click, input, visible } from './webdriver.mjs';
 async function connect([alice, bob]) {
   for (const peer of [alice, bob]) await click(peer, 'Начать чат');
+  await ipc(alice, 'generate_offer_with_candidates');
+  const abandonedGeneration = (await ipc(alice, 'get_session_state')).generation;
+  await ipc(alice, 'disconnect');
   await click(alice, 'Создать приглашение');
   await until(() => execute(alice, 'return !!document.querySelector(arguments[0])?.value', ['[aria-label="Код приглашения"]']), 'offer screen');
   const offer = await execute(alice, 'return document.querySelector(arguments[0]).value', ['[aria-label="Код приглашения"]']);
@@ -18,8 +21,18 @@ async function connect([alice, bob]) {
   for (const peer of [alice, bob]) {
     await until(() => visible(peer, 'Я вижу одинаковый код'), 'verification UI');
   }
-  const sas = await ipc(alice, 'get_fingerprint');
-  if (!sas || sas !== await ipc(bob, 'get_fingerprint')) throw new Error('SAS mismatch');
+  const verification = await ipc(alice, 'get_fingerprint');
+  const sas = verification?.sas;
+  if (!sas || sas !== (await ipc(bob, 'get_fingerprint'))?.sas) throw new Error('SAS mismatch');
+  let staleRejected = false;
+  try { await ipc(alice, 'confirm_sas', { generation: abandonedGeneration, sas }); }
+  catch (error) { staleRejected = error.message.includes('verification_stale'); }
+  if (!staleRejected) throw new Error('Stale confirmation accepted');
+  await ipc(alice, 'reject_sas', { generation: abandonedGeneration });
+  if ((await ipc(alice, 'get_session_state')).generation !== verification.generation ||
+      (await ipc(alice, 'get_session_state')).phase !== 'verification' ||
+      await ipc(alice, 'get_sas_status')) throw new Error('Stale IPC altered replacement session');
+  console.log('PASS native stale confirmation and rejection cannot alter replacement session');
   await execute(alice, 'document.querySelector("input[type=checkbox]").click()');
   await click(alice, 'Коды совпадают');
   await until(() => visible(alice, 'Ожидаем подтверждения собеседника'), 'one-sided confirmation');

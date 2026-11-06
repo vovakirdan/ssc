@@ -3,7 +3,8 @@ export async function request(url, body, method = 'POST') {
     method, headers: { 'content-type': 'application/json' },
     ...(body ? { body: JSON.stringify(body) } : {}),
   }).then(result => result.json());
-  if (response.value?.error) throw new Error(`${response.value.error}: ${response.value.message}`);
+  // W3C driver errors are strings; an IPC result can contain a structured app error.
+  if (typeof response.value?.error === 'string') throw new Error(`${response.value.error}: ${response.value.message}`);
   return response.value;
 }
 export function execute(peer, script, args = []) {

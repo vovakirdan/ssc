@@ -5,8 +5,8 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Slider } from '@/components/ui/slider';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
-import { Tooltip, TooltipProvider } from '@/components/ui/tooltip';
-import { ArrowLeft, Shield, Server, Clock, Zap, Eye, EyeOff, Plus, Trash2, Info, CloudDownload, CheckCircle, XCircle, Loader, Glasses } from 'lucide-react';
+import { TooltipProvider } from '@/components/ui/tooltip';
+import { ArrowLeft, Shield, Server, Clock, Zap, Eye, EyeOff, Plus, Trash2, Info, CheckCircle, XCircle, Loader, Glasses } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import StarBorder from '@/components/StarBorder';
 import ShinyText from '@/components/text/ShinyText';
@@ -51,7 +51,6 @@ const Settings = ({ onBack }: SettingsProps) => {
   const [showCredentials, setShowCredentials] = useState<{[key: string]: boolean}>({});
   const [easterEgg, setEasterEgg] = useState(false);
   const [clickCount, setClickCount] = useState(0);
-  const [isLoadingServers, setIsLoadingServers] = useState(false);
   const { toast } = useToast();
 
   useEffect(() => {
@@ -192,52 +191,6 @@ const Settings = ({ onBack }: SettingsProps) => {
     });
   };
 
-  const loadFreshServers = async () => {
-    setIsLoadingServers(true);
-    try {
-      // Моковый API запрос - в реальности здесь будет запрос к серверу
-      await new Promise(resolve => setTimeout(resolve, 2000)); // Имитируем загрузку
-      
-      const freshServers: ServerConfig[] = [
-        {
-          id: Date.now().toString(),
-          type: 'stun',
-          url: 'stun:stun1.l.google.com:19302'
-        },
-        {
-          id: (Date.now() + 1).toString(),
-          type: 'stun',
-          url: 'stun:stun2.l.google.com:19302'
-        },
-        {
-          id: (Date.now() + 2).toString(),
-          type: 'turn',
-          url: 'turn:openrelay.metered.ca:80',
-          username: 'openrelayproject',
-          credential: 'openrelayproject'
-        }
-      ];
-
-      setSettings(prev => ({
-        ...prev,
-        servers: freshServers
-      }));
-
-      toast({
-        title: "Успешно",
-        description: `Загружено ${freshServers.length} актуальных серверов`
-      });
-    } catch (error) {
-      toast({
-        title: "Ошибка",
-        description: "Не удалось загрузить серверы",
-        variant: "destructive"
-      });
-    } finally {
-      setIsLoadingServers(false);
-    }
-  };
-
   const addServer = (type: 'stun' | 'turn') => {
     const newServer: ServerConfig = {
       id: Date.now().toString(),
@@ -349,10 +302,10 @@ const Settings = ({ onBack }: SettingsProps) => {
                         <div className="bg-slate-700/50 p-4 rounded-lg border border-slate-600">
                           <h4 className="font-semibold text-yellow-400 mb-2">Рекомендации по использованию</h4>
                           <p className="mb-2">
-                            По умолчанию предоставляются бесплатные сервера. Если у вас есть ошибки с соединением, попробуйте загрузить актуальные сервера.
+                            По умолчанию настроен STUN сервер. Если прямое соединение не устанавливается, добавьте TURN сервер выбранного вами провайдера.
                           </p>
                           <p>
-                            Если после этого проблема не решена, рекомендуется получить свои <strong className="text-purple-400">TURN</strong> сервера на одном из ресурсов:
+                            Адрес и учётные данные можно получить у своего провайдера или настроить свои <strong className="text-purple-400">TURN</strong> сервера на одном из ресурсов:
                           </p>
                         </div>
 
@@ -430,18 +383,6 @@ const Settings = ({ onBack }: SettingsProps) => {
                     </DialogContent>
                   </Dialog>
                 </div>
-
-                <Tooltip>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={loadFreshServers}
-                      disabled={isLoadingServers}
-                      className="text-slate-400 hover:text-white"
-                    >
-                      <CloudDownload className={`w-4 h-4 ${isLoadingServers ? 'animate-spin' : ''}`} />
-                    </Button>
-                </Tooltip>
               </div>
               
               <CardDescription className="text-slate-400">
@@ -467,9 +408,10 @@ const Settings = ({ onBack }: SettingsProps) => {
               
               {(settings.servers || []).map((server) => (
                 <AnimatedContent
+                key={server.id}
                 ease="bounce.out"
                 >
-                <div key={server.id} className="p-4 bg-slate-700/50 rounded-lg border border-slate-600">
+                <div className="p-4 bg-slate-700/50 rounded-lg border border-slate-600">
                   <div className="flex items-center justify-between mb-3">
                     <div className="flex items-center space-x-2">
                       <Label className="text-slate-300 font-semibold">

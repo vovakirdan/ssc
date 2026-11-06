@@ -1,4 +1,4 @@
-# Desktop protocol v2
+# Desktop protocol v3
 
 The desktop application has one current session. Each session owns its peer connection,
 DataChannel, ephemeral key exchange, encryption context, partial incoming message and unread
@@ -8,7 +8,7 @@ invalidates old recovery tasks. The UI consumes generation-tagged state and erro
 
 ## Handshake and messages
 
-Manual offer/answer exchange remains available. An invitation is `v2:` followed by Base64
+Manual offer/answer exchange remains available. An invitation is `v3:` followed by Base64
 of GZIP-compressed compact JSON (SDP and ICE candidates). Older invitations are rejected.
 The encoded input limit is 512 KiB; decompressed JSON is limited to 256 KiB, with explicit
 overflow detection. Answers must match the current connection ID. Invalid SDP and keys
@@ -16,16 +16,30 @@ produce safe errors rather than panics. ICE gathering waits for completion, up t
 
 The ordered, reliable WebRTC DataChannel carries binary frames:
 
-- Key exchange: `[version=2, kind=0] || X25519 public key (32 bytes)`.
-- Encrypted: `[version=2, kind, sequence:u64 big-endian] || ciphertext || Poly1305 tag`.
-- Encrypted kind 1 is READY, with empty plaintext. Kind 2 is a message chunk.
+- Commitment: `[version=3, kind=0, role] || SHA256 commitment (32 bytes)`.
+- Reveal: `[version=3, kind=3, role] || X25519 public key (32) || random nonce (32)`.
+- Encrypted: `[version=3, kind, sequence:u64 big-endian] || ciphertext || Poly1305 tag`.
+- Role is 0 for the offer creator and 1 for the answerer. Encrypted kind 1 is READY;
+  kind 2 is a message chunk.
 
-Each session generates fresh X25519 keys. HKDF-SHA256 derives 64 bytes using empty salt and
-`ssc-chat-v2 || min(publicA,publicB) || max(publicA,publicB)` as info. The lexicographically
-smaller public key sends with the first 32-byte key and receives with the second; the other
-side reverses them. SAS is the first six bytes of SHA256(first key), lowercase hex.
-Users must compare this code through a trusted means; the application does not independently
-identify the person at the other end.
+Each session generates fresh X25519 keys and a fresh 32-byte nonce. Session context is
+SHA256(`ssc-chat-v3/session-context\0 || u64_be(connectionID.length) || connectionID`).
+The commitment is SHA256(`ssc-chat-v3/key-commitment\0 || [3,role] || context || public || nonce`).
+Each endpoint sends its commitment before revealing, and reveals only after receiving the
+other commitment. Duplicate, premature, reflected, wrong-role and mismatched reveals abort.
+There is no v2 fallback. A 20-second deadline begins when the peer transport connects or the
+DataChannel opens; it stops once keys are established and does not limit human comparison.
+
+Transcript is SHA256(`ssc-chat-v3/transcript\0 || [3] || context ||
+[0] || creatorCommit || creatorPublic || creatorNonce ||
+[1] || guestCommit || guestPublic || guestNonce`). HKDF-SHA256 uses that transcript as salt
+and the X25519 shared secret as input. Info `ssc-chat-v3/directional-keys` derives 64 bytes:
+creator sends with the first 32 bytes, guest with the second. Separate info `ssc-chat-v3/sas`
+derives 32 bytes, whose first six become the lowercase 12-character hex SAS.
+All-zero/noncontributory and reflected DH keys are rejected. Both users must compare the
+complete code through a trusted means; this is not an independent identity service.
+Commit/reveal prevents choosing a key after seeing the honest reveal to cheaply grind two
+matching codes. It does not prevent online guesses, denial of service, or users skipping comparison.
 
 ChaCha20-Poly1305 authenticates the complete ten-byte header as AAD. Its nonce is four zero
 bytes followed by the sequence number. Directions have separate keys and counters starting
@@ -35,7 +49,9 @@ forward gaps are allowed, repeated/older numbers are rejected. Exhaustion closes
 
 READY is sent only after explicit local SAS confirmation. Both local and peer confirmation,
 plus an available transport, are required to send chat messages. The UI never confirms SAS
-in response to a transport event.
+in response to a transport event. `ssc-sas` and `get_fingerprint` carry
+`{generation,sas}`; confirmation sends that exact pair. Rust rejects stale pairs before
+changing readiness. Rejection also carries generation and cannot close a replacement session.
 
 A UTF-8 message is at most 256 KiB. Its bytes are split into chunks of at most 16 KiB.
 Encrypted chunk plaintext is JSON `{id,index,total,data}`, where `data` is Base64 of the
@@ -74,6 +90,9 @@ npm run build
 cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
 cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings
 cargo test --manifest-path src-tauri/Cargo.toml --locked --lib
+CARGO_TARGET_DIR=/tmp/ssc-dtls-security-target cargo test --manifest-path src-tauri/vendor/webrtc-dtls/Cargo.toml --locked --lib
+cargo audit --file src-tauri/Cargo.lock
+npm audit
 cargo build --manifest-path src-tauri/Cargo.toml --locked
 ```
 
@@ -93,4 +112,4 @@ Before release, additionally verify forced TURN routing on a real server, reconn
 a network interruption, and platform-specific Windows/macOS builds. These require separate
 evidence from the localhost tests.
 
-Short-link pairing and its local native check are described in [connection screens](CONNECTION_SCREENS.md#короткая-ссылка). The WebRTC v2 wire format is unchanged.
+Short-link pairing and its local native check are described in [connection screens](CONNECTION_SCREENS.md#короткая-ссылка). Both desktop participants must use v3; old codes and older clients are rejected.

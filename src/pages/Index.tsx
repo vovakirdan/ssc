@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
-import { errorMessage, nativeListener, useSession } from "@/lib/session";
+import { errorMessage, nativeListener, useSession, type VerificationCode } from "@/lib/session";
 import { applySavedIceServers } from "@/lib/preferences";
 import DiagnosticsPanel from "@/components/DiagnosticsPanel";
 import Welcome from './Welcome';
@@ -16,12 +16,12 @@ import LinkConnection from './LinkConnection';
 type AppMode = 'welcome' | 'generate' | 'scan' | 'verify' | 'chat' | 'settings' | 'link';
 
 const IndexContent = () => {
-  const { error: connectionError } = useSession();
+  const { session, current: currentSession, error: connectionError } = useSession();
   useEffect(() => { if (connectionError) toast.error(connectionError); }, [connectionError]);
   const [mode, setMode] = useState<AppMode>('welcome');
   const [showOptions, setShowOptions] = useState(false);
   const [ttl, setTtl] = useState(5); // TTL по умолчанию 5 минут
-  const [pendingSas, setPendingSas] = useState<string | null>(null); // Сохраняем SAS для передачи в VerifyFingerprint
+  const [pendingSas, setPendingSas] = useState<VerificationCode | null>(null);
 
   const [preferencesReady, setPreferencesReady] = useState(false);
   const [preferencesError, setPreferencesError] = useState<string | null>(null);
@@ -54,16 +54,18 @@ const IndexContent = () => {
 
   // Слушаем событие ssc-sas для автоматического перехода к проверке SAS
   useEffect(() => {
-    const unlistenSas = nativeListener<string>('ssc-sas', (event) => {
-
-      setPendingSas(event.payload); // Сохраняем SAS
+    const unlistenSas = nativeListener<VerificationCode>('ssc-sas', (event) => {
+      const { generation } = currentSession.current;
+      if (event.payload.generation < generation ||
+        (event.payload.generation === generation && ['idle', 'closed'].includes(currentSession.current.phase))) return;
+      setPendingSas(previous => !previous || event.payload.generation >= previous.generation ? event.payload : previous);
       setMode('verify');
     });
 
     return () => {
       unlistenSas();
     };
-  }, []);
+  }, [currentSession]);
 
   const handleStart = () => {
     if (!preferencesReady) { toast.error(preferencesError || 'Применяем настройки подключения…'); return; }
@@ -138,9 +140,11 @@ const IndexContent = () => {
 
   if (mode === 'verify') {
     return <VerifyFingerprint 
+      session={session}
+      sessionError={connectionError}
       onConfirm={handleVerifyConfirm} 
       onCancel={handleVerifyCancel}
-      initialSas={pendingSas} // Передаем сохраненный SAS
+      initialSas={pendingSas}
     />;
   }
 

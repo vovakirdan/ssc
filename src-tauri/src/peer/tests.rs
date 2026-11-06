@@ -1,6 +1,7 @@
 use super::{
     connection::rtc_config,
     crypto::KeyExchange,
+    handshake::{Handshake, Role},
     state::{lock, Phase, Session},
 };
 use std::{sync::Arc, time::Duration};
@@ -12,7 +13,7 @@ fn verification_and_recovery_are_independent() {
     let b = KeyExchange::new().unwrap();
     {
         let mut d = lock(&s.data);
-        d.crypto = Some(a.finish(b.public_key()).unwrap());
+        d.crypto = Some(a.finish(b.public_key(), &[7; 32], true).unwrap());
         d.transport_connected = true;
     }
     assert_eq!(s.snapshot().phase, Phase::Verification);
@@ -28,7 +29,7 @@ fn verification_and_recovery_are_independent() {
 #[tokio::test]
 async fn closing_is_idempotent_and_clears_secrets() {
     let s = Session::new(1, "test".into(), None);
-    lock(&s.data).exchange = Some(KeyExchange::new().unwrap());
+    lock(&s.data).exchange = Some(Handshake::new("test", Role::Initiator).unwrap());
     s.close().await;
     s.close().await;
     assert_eq!(s.snapshot().phase, Phase::Closed);
@@ -52,8 +53,10 @@ async fn two_local_webrtc_peers_exchange_encrypted_chunks() {
         let kb = KeyExchange::new().unwrap();
         let pub_a = ka.public_key();
         let pub_b = kb.public_key();
-        let mut sender = ka.finish(pub_b).unwrap();
-        let receiver = Arc::new(std::sync::Mutex::new(kb.finish(pub_a).unwrap()));
+        let mut sender = ka.finish(pub_b, &[7; 32], true).unwrap();
+        let receiver = Arc::new(std::sync::Mutex::new(
+            kb.finish(pub_a, &[7; 32], false).unwrap(),
+        ));
         let assembly = Arc::new(std::sync::Mutex::new(
             super::protocol::Reassembler::default(),
         ));
@@ -151,13 +154,20 @@ async fn runtime_handshake_waits_for_both_confirmations_and_serializes_messages(
             lock(&b.data).crypto.as_ref().unwrap().sas
         );
         assert!(send_text_session(&a, "too early").await.is_err());
-        confirm(&a).await.unwrap();
+        let sas = lock(&a.data).crypto.as_ref().unwrap().sas.clone();
+        assert_eq!(
+            confirm(&a, b.generation, &sas).await.unwrap_err().code,
+            "verification_stale"
+        );
+        assert!(!lock(&a.data).local_ready);
+        assert!(a.active());
+        confirm(&a, a.generation, &sas).await.unwrap();
         while !lock(&b.data).peer_ready {
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
         assert_eq!(a.snapshot().phase, Phase::WaitingPeer);
         assert!(send_text_session(&a, "still too early").await.is_err());
-        confirm(&b).await.unwrap();
+        confirm(&b, b.generation, &sas).await.unwrap();
         while a.snapshot().phase != Phase::Connected || b.snapshot().phase != Phase::Connected {
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
@@ -186,7 +196,7 @@ async fn runtime_handshake_waits_for_both_confirmations_and_serializes_messages(
         assert_eq!(lock(&a.data).inbox[0].text, "reverse direction");
         // A forged authenticated header/tag must retire the real receiving session.
         let dc = lock(&a.data).dc.clone().unwrap();
-        let mut forged = vec![2, 1];
+        let mut forged = vec![super::crypto::VERSION, 1];
         forged.extend_from_slice(&u64::MAX.to_be_bytes());
         forged.extend_from_slice(&[0u8; 16]);
         dc.send(&bytes::Bytes::from(forged)).await.unwrap();

@@ -1,5 +1,6 @@
 use super::{
     data_channel::attach_dc,
+    handshake::Role,
     state::{lock, Session, MANAGER},
     types::{IceCandidate, ServerConfig},
 };
@@ -53,6 +54,7 @@ pub async fn new_peer(
             false
         } else {
             d.pc = Some(pc.clone());
+            d.role = Some(Role::from_initiator(initiator));
             true
         }
     };
@@ -105,6 +107,7 @@ pub async fn new_peer(
                         if !s.recovered() {
                             return;
                         }
+                        s.start_handshake_timeout();
                         s.publish();
                         update_route(&s).await;
                     }
@@ -131,7 +134,7 @@ pub async fn new_peer(
     }));
     if initiator {
         let dc = pc
-            .create_data_channel("ssc-v2", Some(RTCDataChannelInit::default()))
+            .create_data_channel("ssc-v3", Some(RTCDataChannelInit::default()))
             .await
             .map_err(|_| {
                 AppError::new(

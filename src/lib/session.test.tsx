@@ -31,4 +31,28 @@ describe('native subscriptions', () => {
     await act(async () => resolve({ generation: 1, phase: 'idle', route: null }));
     await waitFor(() => expect(screen.getByText('connected')).toBeInTheDocument());
   });
+  it('accepts a newer authoritative snapshot after a queued event from the previous session', async () => {
+    let resolve: (state: unknown) => void = () => {};
+    let event: (payload: unknown) => void = () => {};
+    native.invoke.mockReturnValue(new Promise(done => { resolve = done; }));
+    native.listen.mockImplementation(async (name, handler) => { if (name === 'ssc-session') event = handler; return vi.fn(); });
+    function State() { const { session } = useSession(); return <p>{session.generation}:{session.phase}</p>; }
+    render(<State />);
+    act(() => event({ payload: { generation: 41, phase: 'closed', route: null } }));
+    await act(async () => resolve({ generation: 42, phase: 'verification', route: null }));
+    expect(screen.getByText('42:verification')).toBeInTheDocument();
+    act(() => event({ payload: { generation: 41, phase: 'connected', route: null } }));
+    expect(screen.getByText('42:verification')).toBeInTheDocument();
+  });
+  it('keeps a newer live phase when the initialization snapshot has the same generation', async () => {
+    let resolve: (state: unknown) => void = () => {};
+    let event: (payload: unknown) => void = () => {};
+    native.invoke.mockReturnValue(new Promise(done => { resolve = done; }));
+    native.listen.mockImplementation(async (name, handler) => { if (name === 'ssc-session') event = handler; return vi.fn(); });
+    function State() { const { session } = useSession(); return <p>{session.phase}</p>; }
+    render(<State />);
+    act(() => event({ payload: { generation: 42, phase: 'connected', route: null } }));
+    await act(async () => resolve({ generation: 42, phase: 'ice', route: null }));
+    expect(screen.getByText('connected')).toBeInTheDocument();
+  });
 });

@@ -10,15 +10,16 @@ use chacha20poly1305::{
 };
 use flate2::{read::GzDecoder, write::GzEncoder, Compression};
 use hkdf::Hkdf;
-use ring::{agreement, rand::SystemRandom};
-use sha2::{Digest, Sha256};
+use ring::rand::{SecureRandom, SystemRandom};
+use sha2::Sha256;
 use std::io::{Read, Write};
 use webrtc::peer_connection::sdp::{
     sdp_type::RTCSdpType, session_description::RTCSessionDescription,
 };
+use x25519_dalek::{PublicKey, StaticSecret};
 use zeroize::{Zeroize, Zeroizing};
 
-pub const VERSION: u8 = 2;
+pub const VERSION: u8 = 3;
 pub const MAX_INVITATION_BYTES: usize = 512 * 1024;
 pub const MAX_DECOMPRESSED_BYTES: usize = 256 * 1024;
 const HEADER_LEN: usize = 10;
@@ -32,60 +33,53 @@ fn invitation_error(code: &str, message: &str) -> AppError {
 }
 
 pub struct KeyExchange {
-    private: agreement::EphemeralPrivateKey,
+    private: StaticSecret,
     public: [u8; 32],
 }
 impl KeyExchange {
     pub fn new() -> Result<Self, AppError> {
-        let private =
-            agreement::EphemeralPrivateKey::generate(&agreement::X25519, &SystemRandom::new())
-                .map_err(|_| error("key_generation", "Не удалось создать ключ сессии"))?;
-        let key = private
-            .compute_public_key()
-            .map_err(|_| error("key_generation", "Не удалось получить публичный ключ"))?;
-        let mut public = [0; 32];
-        public.copy_from_slice(key.as_ref());
+        let mut seed = Zeroizing::new([0u8; 32]);
+        SystemRandom::new()
+            .fill(seed.as_mut())
+            .map_err(|_| error("key_generation", "Не удалось создать ключ сессии"))?;
+        // StaticSecret and SharedSecret zeroize their owned storage on drop.
+        let private = StaticSecret::from(*seed);
+        let public = PublicKey::from(&private).to_bytes();
         Ok(Self { private, public })
     }
     pub fn public_key(&self) -> [u8; 32] {
         self.public
     }
-    pub fn finish(self, peer: [u8; 32]) -> Result<CryptoCtx, AppError> {
+    pub fn finish(
+        self,
+        peer: [u8; 32],
+        transcript: &[u8; 32],
+        initiator: bool,
+    ) -> Result<CryptoCtx, AppError> {
         if peer == self.public {
             return Err(error(
                 "invalid_key",
                 "Публичный ключ собеседника недопустим",
             ));
         }
-        let key = agreement::UnparsedPublicKey::new(&agreement::X25519, peer);
-        let shared = agreement::agree_ephemeral(self.private, &key, |secret| {
-            Zeroizing::new(secret.to_vec())
-        })
-        .map_err(|_| error("invalid_key", "Не удалось согласовать ключ сессии"))?;
-        let hk = Hkdf::<Sha256>::new(None, &shared);
+        let shared = self.private.diffie_hellman(&PublicKey::from(peer));
+        if !shared.was_contributory() {
+            return Err(error("invalid_key", "Не удалось согласовать ключ сессии"));
+        }
+        let hk = Hkdf::<Sha256>::new(Some(transcript), shared.as_bytes());
         let mut keys = Zeroizing::new([0u8; 64]);
-        // Bind the derived keys and SAS to both ephemeral public keys, in a shared order.
-        let (lower, upper) = if self.public < peer {
-            (self.public, peer)
-        } else {
-            (peer, self.public)
-        };
-        let mut info = b"ssc-chat-v2".to_vec();
-        info.extend_from_slice(&lower);
-        info.extend_from_slice(&upper);
-        hk.expand(&info, keys.as_mut())
+        hk.expand(b"ssc-chat-v3/directional-keys", keys.as_mut())
             .map_err(|_| error("key_derivation", "Не удалось получить ключи шифрования"))?;
         let (k1, k2) = keys.split_at(32);
-        let (send, recv) = if self.public < peer {
-            (k1, k2)
-        } else {
-            (k2, k1)
-        };
+        let (send, recv) = if initiator { (k1, k2) } else { (k2, k1) };
         let sealing = ChaCha20Poly1305::new_from_slice(send)
             .map_err(|_| error("key_derivation", "Некорректный ключ шифрования"))?;
         let opening = ChaCha20Poly1305::new_from_slice(recv)
             .map_err(|_| error("key_derivation", "Некорректный ключ шифрования"))?;
-        let sas = hex::encode(&Sha256::digest(k1)[..6]);
+        let mut sas_key = Zeroizing::new([0u8; 32]);
+        hk.expand(b"ssc-chat-v3/sas", sas_key.as_mut())
+            .map_err(|_| error("key_derivation", "Не удалось получить код проверки"))?;
+        let sas = hex::encode(&sas_key[..6]);
         Ok(CryptoCtx {
             sealing,
             opening,
@@ -197,7 +191,7 @@ pub fn enc_bundle(bundle: &ConnectionBundle) -> Result<String, AppError> {
     let bytes = gz
         .finish()
         .map_err(|_| invitation_error("compression_failed", "Не удалось упаковать приглашение"))?;
-    let encoded = format!("v2:{}", STANDARD.encode(bytes));
+    let encoded = format!("v3:{}", STANDARD.encode(bytes));
     if encoded.len() > MAX_INVITATION_BYTES {
         return Err(invitation_error(
             "invitation_too_large",
@@ -213,7 +207,7 @@ pub fn dec_bundle(encoded: &str) -> Result<ConnectionBundle, AppError> {
             "Приглашение слишком большое",
         ));
     }
-    let data = encoded.trim().strip_prefix("v2:").ok_or_else(|| {
+    let data = encoded.trim().strip_prefix("v3:").ok_or_else(|| {
         invitation_error(
             "unsupported_version",
             "Версия приглашения не поддерживается; обновите приложение у обоих участников",
@@ -401,7 +395,10 @@ mod tests {
         let b = KeyExchange::new().unwrap();
         let ap = a.public_key();
         let bp = b.public_key();
-        (a.finish(bp).unwrap(), b.finish(ap).unwrap())
+        (
+            a.finish(bp, &[7; 32], true).unwrap(),
+            b.finish(ap, &[7; 32], false).unwrap(),
+        )
     }
     fn bundle() -> ConnectionBundle {
         let c = CompactSdp {
@@ -439,7 +436,7 @@ mod tests {
         assert_eq!(
             KeyExchange::new()
                 .unwrap()
-                .finish([0; 32])
+                .finish([0; 32], &[7; 32], true)
                 .err()
                 .unwrap()
                 .code,
@@ -447,7 +444,7 @@ mod tests {
         );
         let key = KeyExchange::new().unwrap();
         let public = key.public_key();
-        assert!(key.finish(public).is_err());
+        assert!(key.finish(public, &[7; 32], true).is_err());
     }
     #[test]
     fn ciphertext_kind_and_sequence_are_authenticated_without_consuming_receive_state() {
@@ -491,7 +488,7 @@ mod tests {
     }
     #[test]
     fn malformed_invitation_and_zip_bomb_return_safe_errors() {
-        for input in ["v2:!", "v2:eA==", "v2:"] {
+        for input in ["v3:!", "v3:eA==", "v3:", "v2:eA=="] {
             assert!(dec_bundle(input).is_err());
         }
         assert_eq!(
@@ -504,7 +501,7 @@ mod tests {
         gz.write_all(&vec![b' '; MAX_DECOMPRESSED_BYTES + 1])
             .unwrap();
         assert_eq!(
-            dec_bundle(&format!("v2:{}", STANDARD.encode(gz.finish().unwrap())))
+            dec_bundle(&format!("v3:{}", STANDARD.encode(gz.finish().unwrap())))
                 .unwrap_err()
                 .code,
             "invitation_too_large"
@@ -518,5 +515,23 @@ mod tests {
         c.s.s.uf = "abcd".into();
         c.s.s.fp = "é".repeat(32);
         assert!(compact_bundle_to_full(&c).is_err());
+    }
+    #[test]
+    fn transcript_changes_derived_keys_and_sas() {
+        let private = StaticSecret::from([9; 32]);
+        let public = PublicKey::from(&private).to_bytes();
+        let first = KeyExchange { private, public };
+        let second = KeyExchange {
+            private: StaticSecret::from([9; 32]),
+            public,
+        };
+        let peer = KeyExchange::new().unwrap().public_key();
+        let mut x = first.finish(peer, &[1; 32], true).unwrap();
+        let mut y = second.finish(peer, &[2; 32], true).unwrap();
+        assert_ne!(x.sas, y.sas);
+        assert_ne!(
+            x.encrypt(2, b"same").unwrap(),
+            y.encrypt(2, b"same").unwrap()
+        );
     }
 }

@@ -35,6 +35,10 @@ hkdf = "0.12.4"
 sha2 = "0.10.9"
 bytes = "1.10.1"
 zeroize = "1.8.1"
+x25519-dalek = { version = "2.0.1", features = ["static_secrets", "zeroize"] }
 chacha20poly1305 = { version = "0.10", features = ["std"] }
 
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+
+[patch.crates-io]
+webrtc-dtls = { path = "vendor/webrtc-dtls" }
