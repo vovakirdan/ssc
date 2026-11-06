@@ -45,14 +45,14 @@ async function visible(peer, text) {
 }
 async function connect([alice, bob]) {
   for (const peer of [alice, bob]) await click(peer, 'Начать чат');
-  await click(alice, 'Создать QR-код');
-  await until(() => execute(alice, 'return !!Array.from(document.querySelectorAll("input[readonly],p.font-mono")).find(e=>(e.value||e.textContent).startsWith("v2:"))'), 'offer screen');
-  const offer = await execute(alice, 'return Array.from(document.querySelectorAll("input[readonly],p.font-mono")).find(e=>(e.value||e.textContent).startsWith("v2:")).value || Array.from(document.querySelectorAll("p.font-mono")).find(e=>e.textContent.startsWith("v2:")).textContent');
-  await click(bob, 'Сканировать QR-код');
+  await click(alice, 'Создать приглашение');
+  await until(() => execute(alice, 'return !!document.querySelector(arguments[0])?.value', ['[aria-label="Код приглашения"]']), 'offer screen');
+  const offer = await execute(alice, 'return document.querySelector(arguments[0]).value', ['[aria-label="Код приглашения"]']);
+  await click(bob, 'Принять приглашение');
   await input(bob, 'textarea', offer);
   await click(bob, 'Принять приглашение');
-  await until(() => execute(bob, 'return !!Array.from(document.querySelectorAll("input[readonly],p.font-mono")).find(e=>(e.value||e.textContent).startsWith("v2:"))'), 'answer screen');
-  const answer = await execute(bob, 'return Array.from(document.querySelectorAll("input[readonly],p.font-mono")).find(e=>(e.value||e.textContent).startsWith("v2:")).value || Array.from(document.querySelectorAll("p.font-mono")).find(e=>e.textContent.startsWith("v2:")).textContent');
+  await until(() => execute(bob, 'return !!document.querySelector(arguments[0])?.value', ['[aria-label="Код ответа"]']), 'answer screen');
+  const answer = await execute(bob, 'return document.querySelector(arguments[0]).value', ['[aria-label="Код ответа"]']);
   await input(alice, '[placeholder="Вставьте ответ здесь..."]', answer);
   await click(alice, 'Подключиться');
   for (const peer of [alice, bob]) {

@@ -1,245 +1,113 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { ArrowLeft, Check, Copy, Download, Loader2, RefreshCw, ShieldCheck } from 'lucide-react';
+import { invoke } from '@tauri-apps/api/core';
+import { QRCodeSVG, QRCodeCanvas } from 'qrcode.react';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
-import { QrCode as QrCodeIcon, Copy, Check, ArrowLeft, Scan, Download, X } from 'lucide-react';
-import { toast } from 'sonner';
-import { invoke } from "@tauri-apps/api/core";
-import { errorMessage } from "@/lib/session";
-import { QRCodeSVG } from 'qrcode.react';
-import { QRCodeCanvas } from 'qrcode.react';
-import FadeContent from '@/components/FadeContent';
-import Counter from '@/components/Counter';
-import CircularText from '@/components/CircularText';
+import { errorMessage } from '@/lib/session';
 
 interface GenerateQRProps {
   onBack: () => void;
   onConnected: () => void;
   autoGenerate?: boolean;
-  ttl?: number; // TTL в минутах
+  ttl?: number;
 }
 
-const GenerateQR = ({ onBack, autoGenerate, ttl: ttlMinutes = 5 }: GenerateQRProps) => {
-  const [offer, setOffer] = useState<string>('');
-  const [loading, setLoading] = useState(false);
+export default function GenerateQR({ onBack, autoGenerate, ttl: ttlMinutes = 5 }: GenerateQRProps) {
+  const [offer, setOffer] = useState('');
+  const [generating, setGenerating] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const [copied, setCopied] = useState(false);
   const [answer, setAnswer] = useState('');
-  const [awaitingAnswer, setAwaitingAnswer] = useState(false);
-  // TTL для QR-кода (секунды)
-  const TTL = ttlMinutes * 60;
-  const [ttl, setTtl] = useState(TTL);
-  const generating = useRef(false);
+  const [answerAccepted, setAnswerAccepted] = useState(false);
+  const [generationError, setGenerationError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const lifetime = Math.max(1, ttlMinutes) * 60;
+  const [remaining, setRemaining] = useState(lifetime);
+  const generatingRef = useRef(false);
   const mounted = useRef(true);
+  const canvas = useRef<HTMLCanvasElement>(null);
+
   const generateOffer = useCallback(async () => {
-    if (generating.current) return;
-    generating.current = true;
-    setLoading(true);
+    if (generatingRef.current) return;
+    generatingRef.current = true;
+    setRemaining(lifetime); setGenerating(true); setGenerationError(null); setActionError(null);
+    setOffer(''); setAnswer(''); setCopied(false); setAnswerAccepted(false);
     try {
       const result = await invoke<string>('generate_offer_with_candidates');
-      if (mounted.current) { setOffer(result); setAwaitingAnswer(true); toast.success('QR-код сгенерирован!'); }
-    } catch (error) {
-      if (mounted.current) toast.error(errorMessage(error, 'Ошибка генерации QR-кода'));
+      if (mounted.current) setOffer(result);
+    } catch (failure) {
+      if (mounted.current) setGenerationError(errorMessage(failure, 'Не удалось создать приглашение. Попробуйте ещё раз.'));
     } finally {
-      generating.current = false;
-      if (mounted.current) setLoading(false);
+      generatingRef.current = false;
+      if (mounted.current) setGenerating(false);
     }
-  }, []);
+  }, [lifetime]);
   useEffect(() => {
     mounted.current = true;
     if (autoGenerate) void generateOffer();
     return () => { mounted.current = false; };
   }, [autoGenerate, generateOffer]);
   useEffect(() => {
-    setTtl(TTL);
-    if (!offer) return;
-    const timer = setInterval(() => setTtl(previous => Math.max(0, previous - 1)), 1000);
+    setRemaining(lifetime);
+    if (!offer || answerAccepted) return;
+    const timer = setInterval(() => setRemaining(value => Math.max(0, value - 1)), 1000);
     return () => clearInterval(timer);
-  }, [offer, TTL]);
+  }, [offer, lifetime, answerAccepted]);
   useEffect(() => {
-    if (offer && ttl === 0) void generateOffer();
-  }, [offer, ttl, generateOffer]);
+    if (offer && remaining === 0 && !answerAccepted) void generateOffer();
+  }, [offer, remaining, answerAccepted, generateOffer]);
 
-  const copyToClipboard = async () => {
+  async function copy() {
+    try { await navigator.clipboard.writeText(offer); if (mounted.current) { setCopied(true); setActionError(null); } }
+    catch { if (mounted.current) setActionError('Не удалось скопировать код. Выделите его и скопируйте вручную.'); }
+  }
+  async function acceptAnswer() {
+    if (!answer.trim() || submitting || generating) return;
+    setSubmitting(true); setActionError(null);
     try {
-      await navigator.clipboard.writeText(offer);
-      setCopied(true);
-      toast.success('Ссылка скопирована!');
-      setTimeout(() => setCopied(false), 2000);
-    } catch (error) {
-      toast.error('Не удалось скопировать');
-    }
-  };
+      const accepted = await invoke<boolean>('set_answer_with_candidates', { encoded: answer.trim() });
+      if (!accepted) throw new Error('Не удалось принять ответ. Проверьте полученный код.');
+      if (mounted.current) setAnswerAccepted(true);
+    } catch (failure) {
+      if (mounted.current) setActionError(errorMessage(failure, 'Не удалось принять ответ. Проверьте полученный код.'));
+    } finally { if (mounted.current) setSubmitting(false); }
+  }
+  function saveQR() {
+    if (!canvas.current) return;
+    const link = document.createElement('a');
+    link.href = canvas.current.toDataURL('image/png'); link.download = 'ssc-invitation.png'; link.click();
+  }
 
-  const handleAnswerSubmit = async () => {
-    if (!answer.trim()) {
-      toast.error('Введите ответ');
-      return;
-    }
-
-    setLoading(true);
-    try {
-      const success = await invoke('set_answer_with_candidates', { encoded: answer }) as boolean;
-      if (success) {
-        toast.success('Ответ принят. Устанавливаем соединение…');
-        // Index opens verification after receiving the session SAS.
-      } else {
-        toast.error('Не удалось установить соединение');
-      }
-    } catch (error) {
-      toast.error(errorMessage(error, 'Ошибка при установке соединения'));
-
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 p-4">
-      <div className="max-w-md mx-auto space-y-6">
-        <div className="flex items-center space-x-4">
-          <Button variant="ghost" size="icon" onClick={onBack} className="text-slate-400 hover:text-white">
-            <ArrowLeft className="w-5 h-5" />
-          </Button>
-          <h1 className="text-2xl font-bold text-white">Создать подключение</h1>
-        </div>
-
-        <Card className="bg-slate-800/50 border-slate-700">
-          <CardHeader>
-            <CardTitle className="text-white flex items-center space-x-2">
-              <QrCodeIcon className="w-5 h-5" />
-              <span>Генерация QR-кода</span>
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {!offer ? (
-              <div className="w-full text-center text-slate-400 py-8">
-                <CircularText text="Генерация QR-кода..." />
-              </div>
-            ) : (
-              <FadeContent blur={true}>
-              <div className="space-y-4">
-                <div className="bg-white p-4 rounded-lg">
-                  {/* TTL и прогресс */}
-                  <div className="flex justify-between items-center mb-2">
-                    <div className="flex items-center space-x-2">
-                      <span className="text-xs text-slate-500">QR-код истечёт через</span>
-                      <Counter 
-                        value={ttl}
-                        fontSize={12}
-                        padding={0}
-                        places={ttl >= 100 ? [100, 10, 1] : ttl >= 10 ? [10, 1] : [1]}
-                        gap={1}
-                        textColor="#6b7280"
-                        fontWeight="normal"
-                        containerStyle={{ display: 'inline-block' }}
-                        // Отключаем фон и градиенты для компактного счетчика TTL
-                        gradientHeight={0}
-                        topGradientStyle={{ height: 0, background: 'transparent' }}
-                        bottomGradientStyle={{ height: 0, background: 'transparent' }}
-                      />
-                      {/* <span className="text-xs text-slate-500">сек.</span> */}
-                    </div>
-                    <div className="w-32 h-2 bg-slate-300 rounded overflow-hidden">
-                      <div className="h-2 bg-emerald-500 transition-all" style={{ width: `${(ttl/TTL)*100}%` }} />
-                    </div>
-                  </div>
-                  <div className="w-full aspect-square bg-slate-200 rounded flex items-center justify-center relative">
-                    <div className="w-full h-full flex items-center justify-center">
-                      <QRCodeSVG value={offer} width="100%" height="100%" style={{ width: '100%', height: '100%' }} />
-                    </div>
-                    <div style={{ position: 'absolute', left: '-9999px', top: 0 }}>
-                      <QRCodeCanvas id="qr-canvas" value={offer} size={512} />
-                    </div>
-                  </div>
-                </div>
-                <div className="flex items-center mt-2">
-                  <span className="text-slate-300 mr-2">Сохранить QR</span>
-                  <Button
-                    size="icon"
-                    className="bg-slate-600 hover:bg-slate-500"
-                    onClick={() => {
-                      const canvas = document.getElementById('qr-canvas') as HTMLCanvasElement | null;
-                      if (!canvas) return;
-                      const url = canvas.toDataURL('image/png');
-                      const a = document.createElement('a');
-                      a.href = url;
-                      a.download = 'qr-code.png';
-                      document.body.appendChild(a);
-                      a.click();
-                      document.body.removeChild(a);
-                      toast.success('QR-код сохранён в PNG!');
-                    }}
-                    title="Сохранить QR-код в PNG"
-                  >
-                    <Download className="w-5 h-5" />
-                  </Button>
-                </div>
-                <div className="space-y-2">
-                  <label className="text-slate-300 text-sm">Или поделитесь ссылкой:</label>
-                  <div className="flex space-x-2">
-                    <Input 
-                      value={offer} 
-                      readOnly 
-                      className="bg-slate-700 border-slate-600 text-white"
-                    />
-                    <Button 
-                      size="icon" 
-                      onClick={copyToClipboard}
-                      className="bg-slate-600 hover:bg-slate-500"
-                    >
-                      {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
-                    </Button>
-                  </div>
-                </div>
-              </div>
-              </FadeContent>
-            )}
-          </CardContent>
-        </Card>
-
-        {awaitingAnswer && (
-          <Card className="bg-slate-800/50 border-slate-700">
-            <CardHeader>
-              <CardTitle className="text-white flex items-center space-x-2">
-                <Scan className="w-5 h-5" />
-                <span>Ожидание ответа</span>
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <p className="text-slate-300 text-sm">
-                Вставьте ответ от собеседника:
-              </p>
-              <div className="flex space-x-2">
-                <Input
-                  placeholder="Вставьте ответ здесь..."
-                  value={answer}
-                  onChange={(e) => setAnswer(e.target.value)}
-                  className="bg-slate-700 border-slate-600 text-white h-10 resize-none"
-                  style={{ maxWidth: '100%', overflow: 'hidden' }}
-                />
-                <Button
-                  size="icon"
-                  onClick={() => setAnswer('')}
-                  disabled={!answer.trim()}
-                  className="bg-red-600 hover:bg-red-500"
-                  title="Очистить"
-                >
-                  <X className="w-4 h-4" />
-                </Button>
-              </div>
-              <Button 
-                onClick={handleAnswerSubmit}
-                disabled={loading || !answer.trim()}
-                className="w-full bg-cyan-600 hover:bg-cyan-700"
-              >
-                {loading ? 'Подключение...' : 'Подключиться'}
-              </Button>
-            </CardContent>
-          </Card>
-        )}
-      </div>
-    </div>
-  );
-};
-
-export default GenerateQR;
+  return <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-800 text-white p-5 sm:p-8">
+    <main className="max-w-xl mx-auto space-y-6">
+      <Button variant="ghost" onClick={onBack} className="text-slate-300 -ml-3"><ArrowLeft className="w-4 h-4 mr-2" />Назад</Button>
+      <header><p className="text-emerald-400 text-xs uppercase tracking-[0.2em] mb-3">Я приглашаю</p><h1 className="text-3xl font-semibold tracking-tight">Создать подключение</h1><p className="text-slate-400 mt-3">Обменяйтесь кодами с собеседником, затем сверьте отпечатки.</p></header>
+      <section className="rounded-2xl border border-slate-700 bg-slate-900/70 p-5 sm:p-6 space-y-4" aria-labelledby="invitation-step">
+        <h2 id="invitation-step" className="text-lg font-semibold">1. Отправьте приглашение</h2>
+        <p className="text-slate-400 text-sm">Собеседник может вставить код в приложение или загрузить изображение QR.</p>
+        {generating && <div role="status" className="flex items-center justify-center gap-3 py-12 text-slate-300"><Loader2 className="w-5 h-5 animate-spin" />Создаём приглашение…</div>}
+        {generationError && <div className="space-y-3"><p role="alert" className="text-red-300 text-sm">{generationError}</p><Button onClick={generateOffer}><RefreshCw className="w-4 h-4 mr-2" />Повторить создание</Button></div>}
+        {!offer && !generating && !generationError && <Button onClick={generateOffer}>Создать приглашение</Button>}
+        {offer && <>
+          <label className="block text-sm text-slate-300" htmlFor="invitation-code">Код приглашения</label>
+          <div className="flex gap-2"><Input id="invitation-code" aria-label="Код приглашения" value={offer} readOnly className="bg-slate-800 border-slate-600 text-white font-mono text-xs" /><Button onClick={copy} aria-label="Скопировать приглашение">{copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}</Button></div>
+          {copied && <p role="status" className="text-xs text-emerald-400">Код приглашения скопирован</p>}
+          <div className="rounded-xl bg-white p-4 max-w-[200px] mx-auto"><QRCodeSVG value={offer} className="w-full h-auto" size={256} /></div>
+          <div className="hidden"><QRCodeCanvas ref={canvas} value={offer} size={512} /></div>
+          {!answerAccepted && <p className="text-center text-xs text-slate-400">Приглашение обновится через {Math.floor(remaining / 60)}:{String(remaining % 60).padStart(2, '0')}</p>}
+          <Button variant="ghost" onClick={saveQR} className="text-slate-300"><Download className="w-4 h-4 mr-2" />Сохранить QR в PNG</Button>
+        </>}
+      </section>
+      <section className={`rounded-2xl border border-slate-700 bg-slate-900/70 p-5 sm:p-6 space-y-4 ${!offer ? 'opacity-60' : ''}`} aria-labelledby="answer-step">
+        <h2 id="answer-step" className="text-lg font-semibold">2. Вставьте ответ собеседника</h2>
+        <p className="text-slate-400 text-sm">Попросите собеседника принять приглашение и прислать вам ответный код.</p>
+        <Input aria-label="Ответ собеседника" placeholder="Вставьте ответ здесь..." value={answer} onChange={event => setAnswer(event.target.value)} disabled={!offer || submitting || answerAccepted} className="bg-slate-800 border-slate-600 text-white" />
+        <Button onClick={acceptAnswer} disabled={!offer || !answer.trim() || submitting || answerAccepted} className="w-full bg-emerald-600 hover:bg-emerald-500">{submitting ? 'Принимаем ответ…' : answerAccepted ? 'Ответ принят' : 'Подключиться'}</Button>
+        {answerAccepted && <p role="status" className="text-sm text-emerald-300">Ответ принят. Устанавливаем защищённое соединение…</p>}
+      </section>
+      {actionError && <p role="alert" className="text-red-300 text-sm">{actionError}</p>}
+      <p className="flex items-start gap-2 text-sm text-slate-400"><ShieldCheck className="w-4 h-4 flex-shrink-0 mt-0.5" />Когда появится код сверки, сравните его с собеседником. Чат станет доступен после подтверждения с обеих сторон.</p>
+    </main>
+  </div>;
+}

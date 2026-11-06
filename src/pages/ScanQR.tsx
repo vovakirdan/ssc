@@ -1,224 +1,112 @@
-import { useState } from 'react';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Textarea } from '@/components/ui/textarea';
-import { Scan, ArrowLeft, Link, Copy, Check, Download } from 'lucide-react';
-import { toast } from 'sonner';
-import { invoke } from "@tauri-apps/api/core";
-import { errorMessage } from "@/lib/session";
-import jsQR from 'jsqr';
+import { useEffect, useRef, useState, type ChangeEvent } from 'react';
+import { ArrowLeft, Check, Copy, Download, ImagePlus, ShieldCheck } from 'lucide-react';
+import { invoke } from '@tauri-apps/api/core';
 import { QRCodeSVG, QRCodeCanvas } from 'qrcode.react';
+import jsQR from 'jsqr';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import { errorMessage } from '@/lib/session';
 
-interface ScanQRProps {
-  onBack: () => void;
-  onConnected: () => void;
-}
+interface ScanQRProps { onBack: () => void; onConnected: () => void }
+const MAX_QR_FILE_BYTES = 5 * 1024 * 1024;
+const MAX_IMAGE_PIXELS = 16 * 1024 * 1024;
 
-const ScanQR = ({ onBack }: ScanQRProps) => {
+export default function ScanQR({ onBack }: ScanQRProps) {
   const [offerInput, setOfferInput] = useState('');
   const [answer, setAnswer] = useState('');
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
   const [fileLoading, setFileLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const mounted = useRef(true);
+  const objectURLs = useRef(new Set<string>());
+  const canvas = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    mounted.current = true;
+    const urls = objectURLs.current;
+    return () => { mounted.current = false; urls.forEach(url => URL.revokeObjectURL(url)); urls.clear(); };
+  }, []);
 
-
-
-  const handleAcceptOffer = async () => {
-    if (!offerInput.trim()) {
-      toast.error('Введите ссылку или данные QR-кода');
-      return;
-    }
-
-    setLoading(true);
+  async function acceptOffer() {
+    if (!offerInput.trim() || loading || fileLoading) return;
+    setLoading(true); setError(null); setAnswer(''); setCopied(false);
     try {
-      const result = await invoke('accept_offer_with_candidates', { encoded: offerInput }) as string;
-      setAnswer(result);
-      toast.success('Ответ сгенерирован! Отправьте его собеседнику.');
-    } catch (error) {
-      toast.error(errorMessage(error, 'Ошибка при обработке предложения'));
+      const result = await invoke<string>('accept_offer_with_candidates', { encoded: offerInput.trim() });
+      if (mounted.current) setAnswer(result);
+    } catch (failure) {
+      if (mounted.current) setError(errorMessage(failure, 'Не удалось принять приглашение. Проверьте полученный код.'));
+    } finally { if (mounted.current) setLoading(false); }
+  }
+  async function copyAnswer() {
+    try { await navigator.clipboard.writeText(answer); if (mounted.current) { setCopied(true); setError(null); } }
+    catch { if (mounted.current) setError('Не удалось скопировать ответ. Выделите код и скопируйте вручную.'); }
+  }
+  function saveQR() {
+    if (!canvas.current) return;
+    const link = document.createElement('a');
+    link.href = canvas.current.toDataURL('image/png'); link.download = 'ssc-answer.png'; link.click();
+  }
+  function importQR(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = '';
+    if (!file) return;
+    setError(null);
+    if (file.size > MAX_QR_FILE_BYTES) { setError('Изображение слишком большое. Выберите файл до 5 MiB.'); return; }
+    if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) { setError('Выберите изображение PNG, JPEG или WEBP.'); return; }
+    setFileLoading(true);
+    let url: string;
+    try { url = URL.createObjectURL(file); }
+    catch { setFileLoading(false); setError('Не удалось открыть изображение. Попробуйте другой файл.'); return; }
+    objectURLs.current.add(url);
+    const image = new window.Image();
+    function finish() { URL.revokeObjectURL(url); objectURLs.current.delete(url); if (mounted.current) setFileLoading(false); }
+    image.onload = () => {
+      try {
+        if (!mounted.current) return;
+        if (!image.width || !image.height || image.width * image.height > MAX_IMAGE_PIXELS) throw new Error('image_size');
+        const reader = document.createElement('canvas'); reader.width = image.width; reader.height = image.height;
+        const context = reader.getContext('2d');
+        if (!context) throw new Error('canvas');
+        context.drawImage(image, 0, 0);
+        const pixels = context.getImageData(0, 0, image.width, image.height);
+        const code = jsQR(pixels.data, image.width, image.height);
+        if (!code?.data) { setError('QR-код не найден. Попробуйте другое изображение или вставьте код вручную.'); return; }
+        setOfferInput(code.data); setAnswer(''); setCopied(false);
+      } catch { if (mounted.current) setError('Не удалось прочитать изображение. Выберите изображение поменьше или вставьте код вручную.'); }
+      finally { finish(); }
+    };
+    image.onerror = () => { if (mounted.current) setError('Не удалось прочитать изображение. Попробуйте другой файл.'); finish(); };
+    image.src = url;
+  }
 
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const copyAnswer = async () => {
-    try {
-      await navigator.clipboard.writeText(answer);
-      setCopied(true);
-      toast.success('Ответ скопирован!');
-      setTimeout(() => setCopied(false), 2000);
-    } catch (error) {
-      toast.error('Не удалось скопировать');
-    }
-  };
-
-  return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 p-4">
-      <div className="max-w-md mx-auto space-y-6">
-        <div className="flex items-center space-x-4">
-          <Button variant="ghost" size="icon" onClick={onBack} className="text-slate-400 hover:text-white">
-            <ArrowLeft className="w-5 h-5" />
-          </Button>
-          <h1 className="text-2xl font-bold text-white">Присоединиться к чату</h1>
+  return <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-800 text-white p-5 sm:p-8">
+    <main className="max-w-xl mx-auto space-y-6">
+      <Button variant="ghost" onClick={onBack} className="text-slate-300 -ml-3"><ArrowLeft className="w-4 h-4 mr-2" />Назад</Button>
+      <header><p className="text-emerald-400 text-xs uppercase tracking-[0.2em] mb-3">Меня пригласили</p><h1 className="text-3xl font-semibold tracking-tight">Присоединиться к чату</h1><p className="text-slate-400 mt-3">Примите приглашение и отправьте свой ответ тому, кто создал чат.</p></header>
+      <section className="rounded-2xl border border-slate-700 bg-slate-900/70 p-5 sm:p-6 space-y-4" aria-labelledby="paste-step">
+        <h2 id="paste-step" className="text-lg font-semibold">1. Вставьте приглашение</h2>
+        <label htmlFor="received-invitation" className="block text-sm text-slate-400">Код, который прислал собеседник</label>
+        <Textarea id="received-invitation" placeholder="Вставьте код приглашения..." value={offerInput} onChange={event => { setOfferInput(event.target.value); setAnswer(''); setCopied(false); setError(null); }} disabled={loading} className="bg-slate-800 border-slate-600 text-white min-h-[110px] font-mono text-sm" />
+        <Button onClick={acceptOffer} disabled={loading || fileLoading || !offerInput.trim()} className="w-full bg-emerald-600 hover:bg-emerald-500">{loading ? 'Принимаем приглашение…' : 'Принять приглашение'}</Button>
+        <div className="border-t border-slate-700 pt-4 space-y-3">
+          <label className="flex gap-2 text-sm text-slate-300 items-center" htmlFor="qr-image"><ImagePlus className="w-4 h-4" />Или загрузите изображение QR</label>
+          <input id="qr-image" type="file" accept="image/png,image/jpeg,image/webp" disabled={fileLoading || loading} onChange={importQR} className="block w-full text-xs text-slate-400 file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border file:border-slate-600 file:bg-slate-800 file:text-slate-200" />
+          <p className="text-xs text-slate-500">PNG, JPEG или WEBP, до 5 MiB. Сканирование камерой пока недоступно.</p>
+          {fileLoading && <p role="status" className="text-sm text-slate-300">Читаем QR-код…</p>}
         </div>
-
-        <Card className="bg-slate-800/50 border-slate-700">
-          <CardHeader>
-            <CardTitle className="text-white flex items-center space-x-2">
-              <Scan className="w-5 h-5" />
-              <span>Сканирование QR-кода</span>
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="w-full h-48 bg-slate-700 rounded-lg border-2 border-dashed border-slate-600 flex items-center justify-center">
-              <div className="text-center">
-                <Scan className="w-12 h-12 text-slate-500 mx-auto mb-2" />
-                <p className="text-slate-400 text-sm">Камера для сканирования QR-кода</p>
-                <p className="text-slate-500 text-xs">(функция будет реализована позже)</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="bg-slate-800/50 border-slate-700">
-          <CardHeader>
-            <CardTitle className="text-white flex items-center space-x-2">
-              <Scan className="w-5 h-5" />
-              <span>Загрузить QR-код из файла</span>
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <input
-              type="file"
-              accept="image/png,image/jpeg,image/jpg,image/webp"
-              disabled={fileLoading}
-              className="block w-full text-sm text-slate-300 file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:text-sm file:font-semibold file:bg-emerald-600 file:text-white hover:file:bg-emerald-700"
-              onChange={async (e) => {
-                const file = e.target.files?.[0];
-                if (!file) return;
-                setFileLoading(true);
-                try {
-                  const img = new window.Image();
-                  img.src = URL.createObjectURL(file);
-                  img.onload = () => {
-                    const canvas = document.createElement('canvas');
-                    canvas.width = img.width;
-                    canvas.height = img.height;
-                    const ctx = canvas.getContext('2d');
-                    if (!ctx) throw new Error('Canvas context error');
-                    ctx.drawImage(img, 0, 0, img.width, img.height);
-                    const imageData = ctx.getImageData(0, 0, img.width, img.height);
-                    const code = jsQR(imageData.data, img.width, img.height);
-                    if (code && code.data) {
-                      setOfferInput(code.data);
-                      toast.success('QR-код успешно распознан!');
-                    } else {
-                      toast.error('Не удалось распознать QR-код');
-                    }
-                    setFileLoading(false);
-                    URL.revokeObjectURL(img.src);
-                  };
-                  img.onerror = () => {
-                    toast.error('Ошибка загрузки изображения');
-                    setFileLoading(false);
-                  };
-                } catch (err) {
-                  toast.error('Ошибка при обработке файла');
-                  setFileLoading(false);
-                }
-              }}
-            />
-            <p className="text-slate-400 text-xs mt-2">Поддерживаются PNG, JPG, JPEG, WEBP</p>
-          </CardContent>
-        </Card>
-
-        <Card className="bg-slate-800/50 border-slate-700">
-          <CardHeader>
-            <CardTitle className="text-white flex items-center space-x-2">
-              <Link className="w-5 h-5" />
-              <span>Или введите ссылку</span>
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <Textarea
-              placeholder="Вставьте ссылку приглашения или данные QR-кода..."
-              value={offerInput}
-              onChange={(e) => setOfferInput(e.target.value)}
-              className="bg-slate-700 border-slate-600 text-white min-h-[100px]"
-            />
-            <Button 
-              onClick={handleAcceptOffer}
-              disabled={loading || !offerInput.trim()}
-              className="w-full bg-emerald-600 hover:bg-emerald-700"
-            >
-              {loading ? 'Обработка...' : 'Принять приглашение'}
-            </Button>
-          </CardContent>
-        </Card>
-
-        {answer && (
-          <Card className="bg-slate-800/50 border-slate-700">
-            <CardHeader>
-              <CardTitle className="text-white">Ваш ответ</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <p className="text-slate-300 text-sm">
-                Скопируйте этот ответ и отправьте его собеседнику:
-              </p>
-              <div className="flex flex-col items-center space-y-2">
-                <div className="bg-white p-4 rounded-lg w-full max-w-xs mx-auto">
-                  <div className="w-full aspect-square bg-slate-200 rounded flex items-center justify-center relative">
-                    <div className="w-full h-full flex items-center justify-center">
-                      <QRCodeSVG value={answer} width="100%" height="100%" style={{ width: '100%', height: '100%' }} />
-                    </div>
-                    <div style={{ position: 'absolute', left: '-9999px', top: 0 }}>
-                      <QRCodeCanvas id="answer-qr-canvas" value={answer} size={512} />
-                    </div>
-                  </div>
-                </div>
-                <div className="flex items-center mt-2">
-                  <span className="text-slate-300 mr-2">Сохранить QR</span>
-                  <Button
-                    size="icon"
-                    className="bg-slate-600 hover:bg-slate-500"
-                    onClick={() => {
-                      const canvas = document.getElementById('answer-qr-canvas') as HTMLCanvasElement | null;
-                      if (!canvas) return;
-                      const url = canvas.toDataURL('image/png');
-                      const a = document.createElement('a');
-                      a.href = url;
-                      a.download = 'answer-qr-code.png';
-                      document.body.appendChild(a);
-                      a.click();
-                      document.body.removeChild(a);
-                      toast.success('QR-код ответа сохранён в PNG!');
-                    }}
-                    title="Сохранить QR-код ответа в PNG"
-                  >
-                    <Download className="w-5 h-5" />
-                  </Button>
-                </div>
-              </div>
-              <div className="bg-slate-700 p-3 rounded border border-slate-600 max-h-32 overflow-auto">
-                <p className="text-white text-sm font-mono break-all">{answer}</p>
-              </div>
-              <Button 
-                onClick={copyAnswer}
-                className="w-full bg-cyan-600 hover:bg-cyan-700"
-              >
-                {copied ? <Check className="w-4 h-4 mr-2" /> : <Copy className="w-4 h-4 mr-2" />}
-                {copied ? 'Скопировано!' : 'Скопировать ответ'}
-              </Button>
-              <p className="text-slate-400 text-xs text-center">
-                После отправки ответа соединение будет установлено автоматически
-              </p>
-            </CardContent>
-          </Card>
-        )}
-      </div>
-    </div>
-  );
-};
-
-export default ScanQR;
+      </section>
+      {error && <p role="alert" className="text-sm text-red-300">{error}</p>}
+      {answer && <section className="rounded-2xl border border-emerald-800/70 bg-emerald-950/20 p-5 sm:p-6 space-y-4" aria-labelledby="reply-step">
+        <h2 id="reply-step" className="text-lg font-semibold">2. Отправьте ответ собеседнику</h2>
+        <p className="text-sm text-slate-400">Верните этот код человеку, который прислал приглашение. Он вставит его у себя в приложении.</p>
+        <div className="rounded-xl bg-white p-4 max-w-[200px] mx-auto"><QRCodeSVG value={answer} className="w-full h-auto" size={256} /></div>
+        <div className="hidden"><QRCodeCanvas ref={canvas} value={answer} size={512} /></div>
+        <label htmlFor="answer-code" className="block text-sm text-slate-300">Код ответа</label>
+        <Input id="answer-code" aria-label="Код ответа" value={answer} readOnly className="bg-slate-800 border-slate-600 text-white font-mono text-xs" />
+        <div className="flex flex-wrap gap-2"><Button onClick={copyAnswer} className="bg-emerald-600 hover:bg-emerald-500">{copied ? <Check className="w-4 h-4 mr-2" /> : <Copy className="w-4 h-4 mr-2" />}{copied ? 'Ответ скопирован' : 'Скопировать ответ'}</Button><Button variant="ghost" onClick={saveQR} className="text-slate-300"><Download className="w-4 h-4 mr-2" />Сохранить QR</Button></div>
+      </section>}
+      <p className="flex items-start gap-2 text-sm text-slate-400"><ShieldCheck className="w-4 h-4 flex-shrink-0 mt-0.5" />После обмена появится код сверки. Сравните его на обоих устройствах и подтвердите совпадение.</p>
+    </main>
+  </div>;
+}
