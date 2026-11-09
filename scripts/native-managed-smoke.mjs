@@ -114,7 +114,7 @@ try {
     if (secrets.some(value => report.includes(value))) throw new Error('Sensitive diagnostic output');
     if (!revocationObserved && (await ipc(peer, 'get_link_state'))?.phase !== 'complete') throw new Error('Link not complete');
   }
-  console.log(`PASS ${transport} diagnostic redaction and helper completion`);
+  console.log(`PASS ${transport} diagnostic redaction${revocationObserved ? '' : ' and helper completion'}`);
   stage = 'cleanup';
   if (!revocationObserved) for (const peer of sessions) await clickLabel(peer, 'Выйти из чата');
   for (const peer of sessions) await until(async () => ['idle', 'closed'].includes((await ipc(peer, 'get_session_state')).phase), 'session retirement');
