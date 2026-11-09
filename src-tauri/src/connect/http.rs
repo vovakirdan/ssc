@@ -116,7 +116,7 @@ impl Service {
     pub fn from_env() -> Result<Self, AppError> {
         let origin = match std::env::var("SSC_CONNECT_URL") {
             Ok(origin) => origin,
-            Err(std::env::VarError::NotPresent) => "http://127.0.0.1:8080".into(),
+            Err(std::env::VarError::NotPresent) => "https://connect.vovakirdan.ru".into(),
             Err(_) => {
                 return Err(AppError::new(
                     "helper_configuration",
@@ -399,6 +399,15 @@ fn oversized() -> HttpError {
         false,
     )
     .into()
+}
+
+// Reuse the helper origin policy and hardened transport for access requests.
+pub(crate) fn access_config() -> Result<(String, Client), AppError> {
+    let service = Service::from_env()?;
+    Ok((
+        service.origin.as_str().trim_end_matches('/').to_owned(),
+        service.client,
+    ))
 }
 
 #[cfg(test)]

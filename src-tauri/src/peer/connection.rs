@@ -18,6 +18,11 @@ use webrtc::{
 
 pub fn rtc_config(servers: Option<Vec<ServerConfig>>) -> RTCConfiguration {
     RTCConfiguration {
+        ice_transport_policy: if std::env::var("SSC_FORCE_RELAY").as_deref() == Ok("1") {
+            webrtc::peer_connection::policy::ice_transport_policy::RTCIceTransportPolicy::Relay
+        } else {
+            Default::default()
+        },
         ice_servers: servers
             .unwrap_or_else(default_servers)
             .into_iter()
@@ -34,7 +39,13 @@ pub async fn new_peer(
     session: &Arc<Session>,
     initiator: bool,
 ) -> Result<Arc<RTCPeerConnection>, AppError> {
-    let config = rtc_config(lock(&MANAGER).servers.clone());
+    let servers = lock(&MANAGER).servers.clone();
+    let servers = match servers {
+        Some(servers) => servers,
+        None => crate::access::managed_servers().await?,
+    };
+    session.ensure_active()?;
+    let config = rtc_config(Some(servers));
     let pc = Arc::new(
         APIBuilder::new()
             .build()
@@ -234,4 +245,34 @@ pub fn get_ice_servers() -> Vec<ServerConfig> {
         .servers
         .clone()
         .unwrap_or_else(default_servers)
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NetworkMode {
+    Project,
+    Custom,
+    Disabled,
+}
+
+#[tauri::command]
+pub fn set_network_mode(
+    mode: NetworkMode,
+    servers: Option<Vec<ServerConfig>>,
+) -> Result<bool, AppError> {
+    match mode {
+        NetworkMode::Project => {
+            lock(&MANAGER).servers = None;
+            Ok(true)
+        }
+        NetworkMode::Custom => {
+            set_ice_servers(servers.ok_or_else(|| {
+                AppError::new("ice_config", "ice", "Не заданы свои серверы", true)
+            })?)
+        }
+        NetworkMode::Disabled => {
+            lock(&MANAGER).servers = Some(vec![]);
+            Ok(true)
+        }
+    }
 }

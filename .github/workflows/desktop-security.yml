@@ -40,7 +40,7 @@ jobs:
           npm audit
           npm run lint
           npm test
-          node --test scripts/webdriver.test.mjs
+          node --test scripts/webdriver.test.mjs scripts/packaging/packaging.test.mjs
           npm run build
       - name: Rust regression checks
         run: |
@@ -48,8 +48,11 @@ jobs:
           cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings
           cargo test --manifest-path src-tauri/Cargo.toml --locked --lib
           CARGO_TARGET_DIR="$RUNNER_TEMP/dtls-target" cargo test --manifest-path src-tauri/vendor/webrtc-dtls/Cargo.toml --locked --lib
+      - name: Vendored ICE transport tests
+        run: CARGO_TARGET_DIR="$RUNNER_TEMP/ice-target" cargo test --manifest-path src-tauri/vendor/webrtc-ice/Cargo.toml --locked --lib
       - name: Rust dependency audit
         run: |
           cargo install cargo-audit --version 0.22.2 --locked
           cargo audit --file src-tauri/Cargo.lock
           cargo audit --file src-tauri/vendor/webrtc-dtls/Cargo.lock
+          cargo audit --file src-tauri/vendor/webrtc-ice/Cargo.lock

@@ -1,0 +1,110 @@
+name: Generic desktop releases
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: generic-desktop-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            platform: linux
+          - os: windows-latest
+            platform: windows
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install Linux libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf librsvg2-bin nsis
+      - name: Set up Rust
+        shell: bash
+        run: |
+          rustup update stable --no-self-update
+          rustup default stable
+          rustup component add rustfmt clippy
+      - name: Check frontend and packaging
+        shell: bash
+        run: |
+          npm ci
+          npm audit
+          npm run lint
+          npm test
+          node --test scripts/webdriver.test.mjs scripts/packaging/packaging.test.mjs
+      - name: Check Rust
+        shell: bash
+        run: |
+          cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+          cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings
+          cargo test --manifest-path src-tauri/Cargo.toml --locked --lib
+      - name: Build Linux AppImage
+        if: runner.os == 'Linux'
+        run: |
+          npm run tauri build -- --bundles appimage
+          node scripts/packaging/build-generic.mjs linux "$(find src-tauri/target/release/bundle/appimage -name '*.AppImage' -print -quit)" generic
+      - name: Build Windows binary and verify Microsoft runtime bootstrapper
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          npm run tauri build -- --no-bundle
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $runtime = Join-Path $env:RUNNER_TEMP 'MicrosoftEdgeWebview2Setup.exe'
+          Invoke-WebRequest 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile $runtime
+          $signature = Get-AuthenticodeSignature -LiteralPath $runtime
+          if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation') { throw 'Invalid Microsoft runtime signature' }
+          node scripts/packaging/build-generic.mjs windows src-tauri/target/release/ssc.exe generic $runtime
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Test Windows installer lifecycle without consuming a real activation
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $payload = Join-Path $env:RUNNER_TEMP 'generic-windows'
+          New-Item -ItemType Directory -Path $payload | Out-Null
+          tar -xzf generic/ssc-generic-windows-x64.tar.gz -C $payload
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $compiler = Join-Path ${env:ProgramFiles(x86)} 'NSIS\makensis.exe'
+          if (-not (Test-Path -LiteralPath $compiler)) { choco install nsis --yes --no-progress; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }
+          ./scripts/packaging/test-windows-install.ps1 -PayloadDirectory $payload
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4
+        with:
+          name: generic-${{ matrix.platform }}
+          path: generic/*
+          retention-days: 7
+          if-no-files-found: error
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0
+        with:
+          pattern: generic-*
+          path: generic
+          merge-multiple: true
+      - name: Publish generic assets only
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          gh release view "$RELEASE_TAG" >/dev/null 2>&1 || gh release create "$RELEASE_TAG" --verify-tag --title "SSC $RELEASE_TAG" --notes 'Generic application binaries without activation credentials. Personal installers are distributed separately.'
+          gh release upload "$RELEASE_TAG" generic/* --clobber

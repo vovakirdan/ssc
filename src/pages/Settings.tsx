@@ -14,6 +14,7 @@ import AnimatedContent from '@/components/AnimatedContent';
 import FadeContent from '@/components/FadeContent';
 import { invoke } from '@tauri-apps/api/core';
 import { useIceServers } from '@/hooks/useIceServers';
+import { savedNetworkMode, type AccessStatus, type NetworkMode } from '@/lib/preferences';
 
 interface SettingsProps {
   onBack: () => void;
@@ -29,6 +30,7 @@ interface ServerConfig {
 }
 
 interface SettingsData {
+  networkMode: NetworkMode;
   servers: ServerConfig[];
   offerTTL: number;
 }
@@ -37,6 +39,7 @@ const TTL_VALUES = [1, 2, 5, 10, 60]; // minutes
 
 const Settings = ({ onBack }: SettingsProps) => {
   const [settings, setSettings] = useState<SettingsData>({
+    networkMode: 'project',
     servers: [
       {
         id: '1',
@@ -47,6 +50,31 @@ const Settings = ({ onBack }: SettingsProps) => {
     offerTTL: 5
   });
   const { setIceServers: syncIceServers } = useIceServers();
+
+  const [accessStatus, setAccessStatus] = useState<AccessStatus | null>(null);
+  const [checkingAccess, setCheckingAccess] = useState(false);
+  const accessReference = accessStatus?.state === 'active' ? accessStatus.access_reference : undefined;
+  const copyAccessReference = async () => {
+    if (!accessReference) return;
+    try { await navigator.clipboard.writeText(accessReference); toast({ title: 'Номер доступа скопирован' }); }
+    catch { toast({ title: 'Не удалось скопировать', description: 'Выделите номер доступа и скопируйте его вручную.', variant: 'destructive' }); }
+  };
+  const [resetAccessOpen, setResetAccessOpen] = useState(false);
+  const resetLocalAccess = async () => {
+    try { await invoke('reset_access'); setAccessStatus({ state: 'inactive' }); setResetAccessOpen(false); }
+    catch { toast({ title: 'Ошибка', description: 'Не удалось сбросить локальную активацию', variant: 'destructive' }); }
+  };
+  const retryAccess = async () => {
+    setCheckingAccess(true);
+    try { setAccessStatus(await invoke<AccessStatus>('initialize_access')); }
+    catch { setAccessStatus({ state: 'error' }); }
+    finally { setCheckingAccess(false); }
+  };
+  useEffect(() => {
+    let disposed = false;
+    void invoke<AccessStatus>('get_access_status').then(status => { if (!disposed) setAccessStatus(status); }).catch(() => { if (!disposed) setAccessStatus({ state: 'error' }); });
+    return () => { disposed = true; };
+  }, []);
 
   const [showCredentials, setShowCredentials] = useState<{[key: string]: boolean}>({});
   const [easterEgg, setEasterEgg] = useState(false);
@@ -61,6 +89,7 @@ const Settings = ({ onBack }: SettingsProps) => {
         const parsedSettings = JSON.parse(savedSettings);
         // Ensure servers array exists and has valid structure
         const validatedSettings: SettingsData = {
+          networkMode: savedNetworkMode(parsedSettings),
           servers: Array.isArray(parsedSettings.servers) ? parsedSettings.servers : [
             {
               id: '1',
@@ -137,7 +166,7 @@ const Settings = ({ onBack }: SettingsProps) => {
 
   const handleSave = async () => {
     // Проверяем, что есть хотя бы один сервер
-    if (!settings.servers || settings.servers.length === 0) {
+    if (settings.networkMode === 'custom' && (!settings.servers || settings.servers.length === 0)) {
       toast({
         title: "Ошибка",
         description: "Необходимо добавить хотя бы один STUN или TURN сервер",
@@ -148,7 +177,7 @@ const Settings = ({ onBack }: SettingsProps) => {
 
     // Проверяем, что все серверы имеют корректные URL
     const invalidServers = settings.servers.filter(server => !server.url || server.url.trim() === '');
-    if (invalidServers.length > 0) {
+    if (settings.networkMode === 'custom' && invalidServers.length > 0) {
       toast({
         title: "Ошибка",
         description: "Все серверы должны иметь корректный URL",
@@ -158,7 +187,12 @@ const Settings = ({ onBack }: SettingsProps) => {
     }
 
     // Синхронизируем с Rust
-    const success = await syncIceServers(settings.servers);
+    let success = false;
+    if (settings.networkMode === 'custom') success = await syncIceServers(settings.servers);
+    else {
+      try { await invoke('set_network_mode', { mode: settings.networkMode }); success = true; }
+      catch { toast({ title: 'Ошибка', description: 'Не удалось применить режим подключения', variant: 'destructive' }); }
+    }
     
     if (success) {
       localStorage.setItem('ssc-settings', JSON.stringify(settings));
@@ -172,7 +206,8 @@ const Settings = ({ onBack }: SettingsProps) => {
   };
 
   const handleReset = async () => {
-    const defaultSettings = {
+    const defaultSettings: SettingsData = {
+      networkMode: 'project',
       servers: [
         {
           id: '1',
@@ -182,7 +217,8 @@ const Settings = ({ onBack }: SettingsProps) => {
       ],
       offerTTL: 5
     };
-    if (!await syncIceServers(defaultSettings.servers)) return;
+    try { await invoke('set_network_mode', { mode: 'project' }); }
+    catch { toast({ title: 'Ошибка', description: 'Не удалось применить режим подключения', variant: 'destructive' }); return; }
     setSettings(defaultSettings);
     localStorage.setItem('ssc-settings', JSON.stringify(defaultSettings));
     toast({
@@ -390,8 +426,42 @@ const Settings = ({ onBack }: SettingsProps) => {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="network-mode">Способ подключения</Label>
+                <select id="network-mode" aria-label="Способ подключения" value={settings.networkMode}
+                  onChange={event => setSettings(previous => ({ ...previous, networkMode: event.target.value as NetworkMode }))}
+                  className="w-full rounded-md border border-slate-600 bg-slate-800 p-3 text-slate-100">
+                  <option value="project">TURN проекта</option>
+                  <option value="custom">Свои серверы</option>
+                  <option value="disabled">Без TURN</option>
+                </select>
+                {settings.networkMode === 'project' && <div className="space-y-2 rounded-lg border border-slate-600 p-3 text-sm text-slate-300">
+                  <p>TURN проекта настраивается автоматически. Его временные реквизиты остаются в приложении и не сохраняются в этих настройках.</p>
+                  <p role="status">{accessStatus?.state === 'active' ? 'Установка активирована. Доступ проверяется при подключении.' : accessStatus?.state === 'error' ? (accessStatus.error?.message || 'Не удалось проверить активацию.') : 'Для первого запуска нужен персональный установщик с активацией.'}</p>
+                  {accessReference && <div className="space-y-2">
+                    <Label htmlFor="access-reference">Номер доступа</Label>
+                    <Input id="access-reference" aria-label="Номер доступа" value={accessReference} readOnly className="font-mono text-xs" />
+                    <p className="text-xs text-slate-400">Передайте этот номер владельцу сервиса, если потребуется отозвать доступ установки. Это не код сверки собеседника.</p>
+                    <Button type="button" variant="secondary" onClick={() => { void copyAccessReference(); }}>Скопировать номер доступа</Button>
+                  </div>}
+                  <Button type="button" variant="secondary" onClick={() => { void retryAccess(); }} disabled={checkingAccess}>
+                    {checkingAccess ? 'Проверяем…' : 'Повторить активацию'}
+                  </Button>
+                  <Dialog open={resetAccessOpen} onOpenChange={setResetAccessOpen}>
+                    <DialogTrigger asChild><Button type="button" variant="ghost">Сбросить локальную активацию</Button></DialogTrigger>
+                    <DialogContent>
+                      <DialogHeader><DialogTitle>Удалить локальный допуск?</DialogTitle>
+                        <DialogDescription>Ключ и данные активации на этом компьютере будут удалены. Для повторной активации понадобится новый персональный установщик. Другие копии ключа и допуск на сервере этим действием не отзываются. Свои TURN-серверы останутся в настройках.</DialogDescription>
+                      </DialogHeader>
+                      <Button type="button" variant="destructive" onClick={() => { void resetLocalAccess(); }}>Удалить локальный допуск</Button>
+                    </DialogContent>
+                  </Dialog>
+                </div>}
+                {settings.networkMode === 'disabled' && <p className="text-sm text-slate-300">Только прямое соединение: в некоторых сетях подключение будет недоступно.</p>}
+                {settings.networkMode !== 'custom' && <p className="text-sm text-slate-400">Список своих серверов ниже сохранится и используется только в режиме «Свои серверы».</p>}
+              </div>
               {/* Предупреждение если нет TURN серверов */}
-              {(!settings.servers || settings.servers.filter(s => s.type === 'turn').length === 0) && (
+              {settings.networkMode === 'custom' && (!settings.servers || settings.servers.filter(s => s.type === 'turn').length === 0) && (
                 <div className="p-4 bg-orange-900/30 border border-orange-500/50 rounded-lg">
                   <div className="flex items-start space-x-3">
                     <div className="w-2 h-2 bg-orange-500 rounded-full mt-2 flex-shrink-0"></div>

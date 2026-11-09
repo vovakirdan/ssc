@@ -4410,7 +4410,7 @@ dependencies = [
 
 [[package]]
 name = "ssc"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -4419,6 +4419,7 @@ dependencies = [
  "flate2",
  "hex",
  "hkdf 0.12.4",
+ "libc",
  "once_cell",
  "rand 0.9.5",
  "reqwest 0.12.28",
@@ -4431,6 +4432,7 @@ dependencies = [
  "tauri-plugin-opener",
  "tokio",
  "webrtc",
+ "windows-sys 0.61.2",
  "x25519-dalek",
  "zeroize",
 ]
@@ -4914,7 +4916,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
@@ -5715,8 +5717,6 @@ dependencies = [
 [[package]]
 name = "webrtc-ice"
 version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eb51bde0d790f109a15bfe4d04f1b56fb51d567da231643cb3f21bb74d678997"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -5729,10 +5729,12 @@ dependencies = [
  "stun",
  "thiserror 1.0.69",
  "tokio",
+ "tokio-rustls",
  "turn",
  "url",
  "uuid",
  "waitgroup",
+ "webpki-roots",
  "webrtc-mdns",
  "webrtc-util",
 ]

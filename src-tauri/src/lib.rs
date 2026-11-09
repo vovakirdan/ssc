@@ -1,3 +1,4 @@
+mod access;
 mod commands;
 mod connect;
 mod diagnostics;
@@ -9,7 +10,15 @@ mod utils;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .setup(|app| {
+            access::configure(app)?;
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
+            access::initialize_access,
+            access::get_access_status,
+            access::reset_access,
+            peer::connection::set_network_mode,
             commands::candidate_api::generate_offer_with_candidates,
             commands::candidate_api::accept_offer_with_candidates,
             commands::candidate_api::set_answer_with_candidates,

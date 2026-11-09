@@ -40,3 +40,55 @@ it('keeps manual TURN editing available and persists a chosen replacement', asyn
   fireEvent.click(screen.getByRole('button', { name: 'Сохранить настройки' }));
   await waitFor(() => expect(native.invoke).toHaveBeenCalledWith('set_ice_servers', { servers: [{ ...customServer, url: 'turn:other.example:3478', username: 'other-user', credential: 'other-password', status: 'idle' }] }));
 });
+
+it('switches to project TURN without replacing custom server credentials', async () => {
+  const onBack = vi.fn(); render(<Settings onBack={onBack} />);
+  fireEvent.change(screen.getByRole('combobox', { name: 'Способ подключения' }), { target: { value: 'project' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Сохранить настройки' }));
+  await waitFor(() => expect(onBack).toHaveBeenCalledOnce());
+  expect(native.invoke).toHaveBeenCalledWith('set_network_mode', { mode: 'project' });
+  expect(native.invoke).not.toHaveBeenCalledWith('set_ice_servers', expect.anything());
+  expect(JSON.parse(localStorage.getItem('ssc-settings') || '{}')).toMatchObject({ networkMode: 'project', servers: [customServer] });
+});
+it('explicit no TURN mode needs no personal activation or custom servers', async () => {
+  localStorage.setItem('ssc-settings', JSON.stringify({ networkMode: 'disabled', servers: [], offerTTL: 5 }));
+  render(<Settings onBack={vi.fn()} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Сохранить настройки' }));
+  await waitFor(() => expect(native.invoke).toHaveBeenCalledWith('set_network_mode', { mode: 'disabled' }));
+  expect(JSON.parse(localStorage.getItem('ssc-settings') || '{}').networkMode).toBe('disabled');
+});
+it('deletes local activation only after an explicit confirmation', async () => {
+  render(<Settings onBack={vi.fn()} />);
+  fireEvent.change(screen.getByRole('combobox', { name: 'Способ подключения' }), { target: { value: 'project' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Сбросить локальную активацию' }));
+  expect(native.invoke).not.toHaveBeenCalledWith('reset_access');
+  expect(await screen.findByText(/Другие копии ключа и допуск на сервере этим действием не отзываются/)).toBeInTheDocument();
+  fireEvent.click(await screen.findByRole('button', { name: 'Удалить локальный допуск' }));
+  await waitFor(() => expect(native.invoke).toHaveBeenCalledWith('reset_access'));
+  expect(JSON.parse(localStorage.getItem('ssc-settings') || '{}').servers).toEqual([customServer]);
+});
+it('shows and copies only the active installation reference for operator revocation', async () => {
+  const reference = 'a'.repeat(43);
+  const copy = vi.fn().mockResolvedValue(undefined);
+  const original = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: copy } });
+  try {
+    native.invoke.mockImplementation(async (name: string) => name === 'get_access_status' ? { state: 'active', access_reference: reference } : true);
+    render(<Settings onBack={vi.fn()} />);
+    fireEvent.change(screen.getByRole('combobox', { name: 'Способ подключения' }), { target: { value: 'project' } });
+    expect(await screen.findByRole('textbox', { name: 'Номер доступа' })).toHaveValue(reference);
+    fireEvent.click(screen.getByRole('button', { name: 'Скопировать номер доступа' }));
+    await waitFor(() => expect(copy).toHaveBeenCalledExactlyOnceWith(reference));
+  } finally {
+    if (original) Object.defineProperty(navigator, 'clipboard', original);
+    else Reflect.deleteProperty(navigator, 'clipboard');
+  }
+});
+it('does not display a reference from an inactive or failed activation', async () => {
+  native.invoke.mockImplementation(async (name: string) => name === 'get_access_status' ? { state: 'inactive', access_reference: 'old-reference' } : true);
+  render(<Settings onBack={vi.fn()} />);
+  fireEvent.change(screen.getByRole('combobox', { name: 'Способ подключения' }), { target: { value: 'project' } });
+  await screen.findByText('Для первого запуска нужен персональный установщик с активацией.');
+  expect(screen.queryByRole('textbox', { name: 'Номер доступа' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Скопировать номер доступа' })).not.toBeInTheDocument();
+});

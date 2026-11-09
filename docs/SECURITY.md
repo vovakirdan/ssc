@@ -14,7 +14,11 @@ checks on feature pushes and pull requests. The scoped minimatch override suppli
 patched 11.0.1 line to typescript-eslint until its upstream range moves forward; lint/tests
 validate that integration. Do not use `npm audit fix --force` without reviewing the changes.
 
-WebRTC retains its existing TURN transports. Its DTLS dependency is vendored with a small
+The original WebRTC ICE implementation only gathered UDP TURN candidates; accepting TCP/TLS
+settings was not proof of working support. The vendored ICE transport patch adds framed
+TURN-over-TCP and certificate-validated TLS, with independent stream tests and real relay checks.
+See [ICE patch provenance](../src-tauri/vendor/webrtc-ice/SSC-PATCH.md).
+Its DTLS dependency is vendored with a small
 API migration to p256/p384 0.14 and patched crypto-bigint. No arithmetic is reimplemented;
 the original library tests and additional curve agreement tests exercise the patch. See
 [patch provenance](../src-tauri/vendor/webrtc-dtls/SSC-PATCH.md). This removes versions affected by [RUSTSEC-2026-0387](https://rustsec.org/advisories/RUSTSEC-2026-0387.html).
@@ -48,3 +52,19 @@ TURN operation on a deployed server, arbitrary NAT traversal, Windows/macOS beha
 formal cryptographic correctness. The committed exchange is a custom protocol, not an
 implementation or certification of ZRTP. Its commitment ordering follows the rationale in
 [RFC 6189 section 4.4.1.1](https://www.rfc-editor.org/rfc/rfc6189.html#section-4.4.1.1).
+
+## Personal activation
+
+Generic releases contain no shared TURN password or bootstrap profile. A personal installer
+contains a seven-day one-use activation code; its first successful claimant gets access.
+The installation generates its key locally before redeeming and retries idempotently.
+Windows stores the key with current-user DPAPI; Linux uses a0700 directory/0600file,
+without claiming disk encryption or hardware binding. Copying that private key clones its
+cryptographic identity; no hardware fingerprint is collected to detect such a copy.
+
+Managed TURN responses accept only the configured project host/ports/transports. Custom
+TURN remains explicit and unchanged. Managed credentials stay in Rust, never in localStorage
+or renderer IPC. Access registry and revocation journal persist separately from RAM-only
+chat invitations. Revocation stops new issuance immediately; complete relay revocation is
+bounded by remaining600-second credentials plus15seconds of guard enforcement, tested
+separately from invitation expiry and the lifetime of an allowed active chat.
