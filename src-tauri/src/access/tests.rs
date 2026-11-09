@@ -465,3 +465,135 @@ fn local_reset_rejects_profile_redirection_and_never_follows_access_symlinks() {
     );
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[tokio::test]
+async fn manually_entered_code_retries_after_lost_reply_and_restart_without_storing_token() {
+    use ring::signature::{UnparsedPublicKey, ED25519};
+    let path = directory();
+    let mut first_public = None;
+    let mut attempt = 0;
+    let origin_state = std::sync::Arc::new(Mutex::new(String::new()));
+    let server_origin = origin_state.clone();
+    let token = B64.encode([19u8; 32]);
+    let expected_token = token.clone();
+    let (origin,server)=mock_http(2,move|route,body| {
+        assert_eq!(route,"/v1/access/activate");assert_eq!(body["token"],expected_token);
+        let public=body["public_key"].as_str().unwrap();let pubbytes=B64.decode(public).unwrap();let signature=B64.decode(body["signature"].as_str().unwrap()).unwrap();
+        let message=format!("ssc-access-v1\nactivate\n{}\n{}\n{public}\n",server_origin.lock().unwrap(),expected_token);
+        UnparsedPublicKey::new(&ED25519,&pubbytes).verify(message.as_bytes(),&signature).unwrap();
+        if let Some(ref previous)=first_public {assert_eq!(public,previous);} else {first_public=Some(public.to_owned());}
+        attempt+=1;
+        if attempt==1 {(503,serde_json::json!({"error":"reply_lost"}))}
+        else {(200,serde_json::json!({"state":"active","device_id":B64.encode(Sha256::digest(pubbytes))}))}
+    }).await;
+    *origin_state.lock().unwrap() = origin.clone();
+    let client = http_client();
+    assert_eq!(
+        activate_manual(&path, &origin, &client, &format!(" \n{token}\t "))
+            .await
+            .err()
+            .unwrap()
+            .code,
+        "access_unavailable"
+    );
+    assert!(!path.join("bootstrap.json").exists());
+    assert!(!path.join("access.active").exists());
+    let pending = identity(&path, &origin).unwrap().unwrap();
+    assert!(!pending.activated);
+    let expected = pending.device_id().unwrap();
+    // Reload from disk and re-enter the same code, just as after restarting the app.
+    let active = activate_manual(&path, &origin, &client, &token)
+        .await
+        .unwrap();
+    assert_eq!(active.device_id().unwrap(), expected);
+    assert!(identity(&path, &origin).unwrap().unwrap().activated);
+    assert!(path.join("access.active").exists());
+    assert!(!path.join("bootstrap.json").exists());
+    assert_eq!(
+        activate_manual(&path, &origin, &client, &token)
+            .await
+            .err()
+            .unwrap()
+            .code,
+        "access_already_active"
+    );
+    assert_eq!(
+        identity(&path, &origin)
+            .unwrap()
+            .unwrap()
+            .device_id()
+            .unwrap(),
+        expected
+    );
+    server.await.unwrap();
+    std::fs::remove_dir_all(path).unwrap();
+}
+#[tokio::test]
+async fn malformed_manual_codes_never_create_keys_or_contact_service() {
+    let path = directory();
+    let origin = "http://127.0.0.1:1";
+    for code in [
+        "",
+        "short",
+        &"A".repeat(42),
+        &format!("{}=", B64.encode([1u8; 32])),
+        &"a".repeat(43),
+    ] {
+        assert_eq!(
+            activate_manual(&path, origin, &http_client(), code)
+                .await
+                .err()
+                .unwrap()
+                .code,
+            "access_code_invalid"
+        );
+        assert!(!path.join("access.key").exists());
+    }
+    std::fs::remove_dir_all(path).unwrap();
+}
+#[tokio::test]
+async fn server_denied_expired_used_or_conflicting_manual_codes_leave_pending_identity_retryable() {
+    let path = directory();
+    let token = B64.encode([24u8; 32]);
+    for (status, reason) in [(403, "expired"), (403, "used"), (409, "conflict")] {
+        let (origin, server) =
+            mock_http(1, move |_, _| (status, serde_json::json!({"error":reason}))).await;
+        // Use separate configured origins/profiles to avoid mutating any previous identity.
+        let profile = path.join(status.to_string() + reason);
+        storage::prepare(&profile).unwrap();
+        assert_eq!(
+            activate_manual(&profile, &origin, &http_client(), &token)
+                .await
+                .err()
+                .unwrap()
+                .code,
+            "access_denied"
+        );
+        assert!(!identity(&profile, &origin).unwrap().unwrap().activated);
+        assert!(!profile.join("access.active").exists());
+        assert!(!profile.join("bootstrap.json").exists());
+        server.await.unwrap();
+    }
+    std::fs::remove_dir_all(path).unwrap();
+}
+#[tokio::test]
+async fn manual_activation_obeys_cross_process_lock_without_replacing_identity() {
+    let path = directory();
+    let held = storage::lock(&path).unwrap();
+    assert_eq!(
+        activate_manual(
+            &path,
+            "http://127.0.0.1:1",
+            &http_client(),
+            &B64.encode([20u8; 32])
+        )
+        .await
+        .err()
+        .unwrap()
+        .code,
+        "access_busy"
+    );
+    assert!(!path.join("access.key").exists());
+    drop(held);
+    std::fs::remove_dir_all(path).unwrap();
+}

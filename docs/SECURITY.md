@@ -57,10 +57,21 @@ implementation or certification of ZRTP. Its commitment ordering follows the rat
 
 Generic releases contain no shared TURN password or bootstrap profile. A personal installer
 contains a seven-day one-use activation code; its first successful claimant gets access.
+An operator can also issue that code separately for entry in the installed client's
+Settings. Code entry uses the same signed, origin-bound redemption and profile lock as
+installer activation. The renderer keeps the entered code only in the form's memory,
+clearing it after success or unmount; JavaScript strings cannot be guaranteed erased.
+Codes must not appear in diagnostics, localStorage or workflow logs. The private issuance
+workflow publishes only a one-day private artifact; possession permits the first claim.
 The installation generates its key locally before redeeming and retries idempotently.
 Windows stores the key with current-user DPAPI; Linux uses a0700 directory/0600file,
 without claiming disk encryption or hardware binding. Copying that private key clones its
 cryptographic identity; no hardware fingerprint is collected to detect such a copy.
+
+In Automatic mode, an installation without activation uses the existing STUN/direct
+route and never requests managed TURN credentials. Explicit custom servers work without
+project activation. Errors for an activated identity remain visible rather than causing
+a silent fallback. Activation and network setting changes affect subsequent connections.
 
 Managed TURN responses accept only the configured project host/ports/transports. Custom
 TURN remains explicit and unchanged. Managed credentials stay in Rust, never in localStorage

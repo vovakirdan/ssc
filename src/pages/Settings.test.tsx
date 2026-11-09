@@ -12,7 +12,7 @@ const customServer = { id: 'personal', type: 'turn', url: 'turn:relay.example:34
 beforeEach(() => {
   localStorage.clear();
   localStorage.setItem('ssc-settings', JSON.stringify({ servers: [customServer], offerTTL: 10 }));
-  native.invoke.mockReset().mockResolvedValue(true);
+  native.invoke.mockReset().mockImplementation(async (name: string) => name === 'get_access_status' ? { state: 'inactive' } : true);
   vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
 });
 
@@ -60,7 +60,9 @@ it('explicit no TURN mode needs no personal activation or custom servers', async
 it('deletes local activation only after an explicit confirmation', async () => {
   render(<Settings onBack={vi.fn()} />);
   fireEvent.change(screen.getByRole('combobox', { name: 'Способ подключения' }), { target: { value: 'project' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Сбросить локальную активацию' }));
+  const reset = screen.getByRole('button', { name: 'Сбросить локальную активацию' });
+  await waitFor(() => expect(reset).toBeEnabled());
+  fireEvent.click(reset);
   expect(native.invoke).not.toHaveBeenCalledWith('reset_access');
   expect(await screen.findByText(/Другие копии ключа и допуск на сервере этим действием не отзываются/)).toBeInTheDocument();
   fireEvent.click(await screen.findByRole('button', { name: 'Удалить локальный допуск' }));
@@ -88,7 +90,91 @@ it('does not display a reference from an inactive or failed activation', async (
   native.invoke.mockImplementation(async (name: string) => name === 'get_access_status' ? { state: 'inactive', access_reference: 'old-reference' } : true);
   render(<Settings onBack={vi.fn()} />);
   fireEvent.change(screen.getByRole('combobox', { name: 'Способ подключения' }), { target: { value: 'project' } });
-  await screen.findByText('Для первого запуска нужен персональный установщик с активацией.');
+  await screen.findByText('Установка не активирована. В автоматическом режиме используется прямое соединение со STUN.');
   expect(screen.queryByRole('textbox', { name: 'Номер доступа' })).not.toBeInTheDocument();
   expect(screen.queryByRole('button', { name: 'Скопировать номер доступа' })).not.toBeInTheDocument();
+});
+
+const activationCode = 'A'.repeat(43);
+async function enterActivationCode(value = activationCode) {
+  const field = screen.getByLabelText('Код активации');
+  await waitFor(() => expect(field).toBeEnabled());
+  fireEvent.change(field, { target: { value } });
+  return field;
+}
+
+it('activates by a trimmed code without changing custom TURN or persisting the code', async () => {
+  const reference = 'b'.repeat(43);
+  const stored = localStorage.getItem('ssc-settings');
+  native.invoke.mockImplementation(async (name: string) => name === 'activate_access'
+    ? { state: 'active', access_reference: reference }
+    : name === 'get_access_status' ? { state: 'inactive' } : true);
+  const onBack = vi.fn();
+  render(<Settings onBack={onBack} />);
+  const field = await enterActivationCode(`  ${activationCode}\n`);
+  expect(field).toHaveAttribute('type', 'password');
+  fireEvent.click(screen.getByRole('button', { name: 'Активировать' }));
+  await waitFor(() => expect(native.invoke).toHaveBeenCalledWith('activate_access', { code: activationCode }));
+  expect(await screen.findByRole('textbox', { name: 'Номер доступа' })).toHaveValue(reference);
+  expect(screen.queryByLabelText('Код активации')).not.toBeInTheDocument();
+  expect(screen.getByRole('combobox', { name: 'Способ подключения' })).toHaveValue('custom');
+  expect(native.invoke).not.toHaveBeenCalledWith('set_network_mode', expect.anything());
+  expect(onBack).not.toHaveBeenCalled();
+  expect(localStorage.getItem('ssc-settings')).toBe(stored);
+  fireEvent.click(screen.getByRole('button', { name: 'Сохранить настройки' }));
+  await waitFor(() => expect(onBack).toHaveBeenCalledOnce());
+  expect(localStorage.getItem('ssc-settings')).not.toContain(activationCode);
+});
+
+it('rejects malformed codes before IPC and never echoes their contents in errors', async () => {
+  render(<Settings onBack={vi.fn()} />);
+  await enterActivationCode('wrong-private-code');
+  fireEvent.click(screen.getByRole('button', { name: 'Активировать' }));
+  expect(await screen.findByRole('alert')).toHaveTextContent('Проверьте код');
+  expect(screen.getByRole('alert')).not.toHaveTextContent('wrong-private-code');
+  expect(native.invoke.mock.calls.some(([name]) => name === 'activate_access')).toBe(false);
+});
+
+it('keeps a failed code for retry but shows only a known safe error', async () => {
+  let denied = true;
+  native.invoke.mockImplementation(async (name: string) => {
+    if (name === 'activate_access') {
+      if (denied) throw { code: 'access_denied', message: `Untrusted failure ${activationCode}` };
+      return { state: 'active' };
+    }
+    return name === 'get_access_status' ? { state: 'inactive' } : true;
+  });
+  render(<Settings onBack={vi.fn()} />);
+  const field = await enterActivationCode();
+  fireEvent.click(screen.getByRole('button', { name: 'Активировать' }));
+  expect(await screen.findByRole('alert')).toHaveTextContent('Код просрочен');
+  expect(screen.getByRole('alert')).not.toHaveTextContent(activationCode);
+  expect(field).toHaveValue(activationCode);
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Активировать' })).toBeEnabled());
+  denied = false;
+  fireEvent.click(screen.getByRole('button', { name: 'Активировать' }));
+  await screen.findByText('Установка активирована. Доступ проверяется при подключении.');
+  expect(screen.queryByLabelText('Код активации')).not.toBeInTheDocument();
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+});
+
+it('keeps activation available with TURN disabled and clears the code when settings close', async () => {
+  localStorage.setItem('ssc-settings', JSON.stringify({ networkMode: 'disabled', servers: [], offerTTL: 5 }));
+  const first = render(<Settings onBack={vi.fn()} />);
+  await enterActivationCode();
+  first.unmount();
+  render(<Settings onBack={vi.fn()} />);
+  const field = screen.getByLabelText('Код активации');
+  await waitFor(() => expect(field).toBeEnabled());
+  expect(field).toHaveValue('');
+  expect(screen.getByRole('combobox', { name: 'Способ подключения' })).toHaveValue('disabled');
+  expect(localStorage.getItem('ssc-settings')).not.toContain(activationCode);
+});
+
+it('does not offer replacement code entry for an activated installation', async () => {
+  native.invoke.mockImplementation(async (name: string) => name === 'get_access_status' ? { state: 'active' } : true);
+  render(<Settings onBack={vi.fn()} />);
+  await screen.findByText('Установка активирована. Доступ проверяется при подключении.');
+  expect(screen.queryByLabelText('Код активации')).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Сбросить локальную активацию' })).toBeEnabled();
 });

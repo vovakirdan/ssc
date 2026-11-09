@@ -14,7 +14,8 @@ import AnimatedContent from '@/components/AnimatedContent';
 import FadeContent from '@/components/FadeContent';
 import { invoke } from '@tauri-apps/api/core';
 import { useIceServers } from '@/hooks/useIceServers';
-import { savedNetworkMode, type AccessStatus, type NetworkMode } from '@/lib/preferences';
+import { savedNetworkMode, type NetworkMode } from '@/lib/preferences';
+import AccessActivation from '@/components/AccessActivation';
 
 interface SettingsProps {
   onBack: () => void;
@@ -50,31 +51,6 @@ const Settings = ({ onBack }: SettingsProps) => {
     offerTTL: 5
   });
   const { setIceServers: syncIceServers } = useIceServers();
-
-  const [accessStatus, setAccessStatus] = useState<AccessStatus | null>(null);
-  const [checkingAccess, setCheckingAccess] = useState(false);
-  const accessReference = accessStatus?.state === 'active' ? accessStatus.access_reference : undefined;
-  const copyAccessReference = async () => {
-    if (!accessReference) return;
-    try { await navigator.clipboard.writeText(accessReference); toast({ title: 'Номер доступа скопирован' }); }
-    catch { toast({ title: 'Не удалось скопировать', description: 'Выделите номер доступа и скопируйте его вручную.', variant: 'destructive' }); }
-  };
-  const [resetAccessOpen, setResetAccessOpen] = useState(false);
-  const resetLocalAccess = async () => {
-    try { await invoke('reset_access'); setAccessStatus({ state: 'inactive' }); setResetAccessOpen(false); }
-    catch { toast({ title: 'Ошибка', description: 'Не удалось сбросить локальную активацию', variant: 'destructive' }); }
-  };
-  const retryAccess = async () => {
-    setCheckingAccess(true);
-    try { setAccessStatus(await invoke<AccessStatus>('initialize_access')); }
-    catch { setAccessStatus({ state: 'error' }); }
-    finally { setCheckingAccess(false); }
-  };
-  useEffect(() => {
-    let disposed = false;
-    void invoke<AccessStatus>('get_access_status').then(status => { if (!disposed) setAccessStatus(status); }).catch(() => { if (!disposed) setAccessStatus({ state: 'error' }); });
-    return () => { disposed = true; };
-  }, []);
 
   const [showCredentials, setShowCredentials] = useState<{[key: string]: boolean}>({});
   const [easterEgg, setEasterEgg] = useState(false);
@@ -431,35 +407,15 @@ const Settings = ({ onBack }: SettingsProps) => {
                 <select id="network-mode" aria-label="Способ подключения" value={settings.networkMode}
                   onChange={event => setSettings(previous => ({ ...previous, networkMode: event.target.value as NetworkMode }))}
                   className="w-full rounded-md border border-slate-600 bg-slate-800 p-3 text-slate-100">
-                  <option value="project">TURN проекта</option>
+                  <option value="project">Автоматически</option>
                   <option value="custom">Свои серверы</option>
                   <option value="disabled">Без TURN</option>
                 </select>
-                {settings.networkMode === 'project' && <div className="space-y-2 rounded-lg border border-slate-600 p-3 text-sm text-slate-300">
-                  <p>TURN проекта настраивается автоматически. Его временные реквизиты остаются в приложении и не сохраняются в этих настройках.</p>
-                  <p role="status">{accessStatus?.state === 'active' ? 'Установка активирована. Доступ проверяется при подключении.' : accessStatus?.state === 'error' ? (accessStatus.error?.message || 'Не удалось проверить активацию.') : 'Для первого запуска нужен персональный установщик с активацией.'}</p>
-                  {accessReference && <div className="space-y-2">
-                    <Label htmlFor="access-reference">Номер доступа</Label>
-                    <Input id="access-reference" aria-label="Номер доступа" value={accessReference} readOnly className="font-mono text-xs" />
-                    <p className="text-xs text-slate-400">Передайте этот номер владельцу сервиса, если потребуется отозвать доступ установки. Это не код сверки собеседника.</p>
-                    <Button type="button" variant="secondary" onClick={() => { void copyAccessReference(); }}>Скопировать номер доступа</Button>
-                  </div>}
-                  <Button type="button" variant="secondary" onClick={() => { void retryAccess(); }} disabled={checkingAccess}>
-                    {checkingAccess ? 'Проверяем…' : 'Повторить активацию'}
-                  </Button>
-                  <Dialog open={resetAccessOpen} onOpenChange={setResetAccessOpen}>
-                    <DialogTrigger asChild><Button type="button" variant="ghost">Сбросить локальную активацию</Button></DialogTrigger>
-                    <DialogContent>
-                      <DialogHeader><DialogTitle>Удалить локальный допуск?</DialogTitle>
-                        <DialogDescription>Ключ и данные активации на этом компьютере будут удалены. Для повторной активации понадобится новый персональный установщик. Другие копии ключа и допуск на сервере этим действием не отзываются. Свои TURN-серверы останутся в настройках.</DialogDescription>
-                      </DialogHeader>
-                      <Button type="button" variant="destructive" onClick={() => { void resetLocalAccess(); }}>Удалить локальный допуск</Button>
-                    </DialogContent>
-                  </Dialog>
-                </div>}
+                {settings.networkMode === 'project' && <p className="text-sm text-slate-300">Без активации используется прямое соединение со STUN. После активации подключается TURN проекта. В некоторых сетях для связи потребуется TURN.</p>}
                 {settings.networkMode === 'disabled' && <p className="text-sm text-slate-300">Только прямое соединение: в некоторых сетях подключение будет недоступно.</p>}
                 {settings.networkMode !== 'custom' && <p className="text-sm text-slate-400">Список своих серверов ниже сохранится и используется только в режиме «Свои серверы».</p>}
               </div>
+              <AccessActivation />
               {/* Предупреждение если нет TURN серверов */}
               {settings.networkMode === 'custom' && (!settings.servers || settings.servers.filter(s => s.type === 'turn').length === 0) && (
                 <div className="p-4 bg-orange-900/30 border border-orange-500/50 rounded-lg">

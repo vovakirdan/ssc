@@ -212,3 +212,37 @@ async fn runtime_handshake_waits_for_both_confirmations_and_serializes_messages(
     .await
     .expect("runtime handshake timed out");
 }
+
+#[test]
+fn unactivated_project_uses_stun_but_known_access_errors_never_fall_back() {
+    use super::connection::project_or_stun;
+    let inactive = crate::errors::AppError::new(
+        "access_activation_required",
+        "access",
+        "Activation missing",
+        true,
+    );
+    let servers = project_or_stun(Err(inactive)).unwrap();
+    assert_eq!(servers.len(), 1);
+    assert_eq!(servers[0].r#type, "stun");
+    assert!(servers[0].credential.is_none());
+    for code in [
+        "access_denied",
+        "access_unavailable",
+        "access_storage",
+        "access_response",
+        "access_origin",
+        "access_activation_expired",
+    ] {
+        let error = crate::errors::AppError::new(code, "access", "Safe failure", true);
+        assert_eq!(project_or_stun(Err(error)).err().unwrap().code, code);
+    }
+    let active = vec![super::types::ServerConfig {
+        id: "managed".into(),
+        r#type: "turn".into(),
+        url: "turn:turn.vovakirdan.ru:3478?transport=udp".into(),
+        username: Some("temporary".into()),
+        credential: Some("temporary".into()),
+    }];
+    assert_eq!(project_or_stun(Ok(active)).unwrap()[0].r#type, "turn");
+}

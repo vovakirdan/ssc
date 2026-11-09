@@ -114,6 +114,23 @@ ZeroID is also available on mobile devices with the same level of security and e
 - [Tokio](https://tokio.rs/) - async runtime
 - [Serde](https://serde.rs/) - serialization/deserialization
 
+## Connection and activation
+
+The default **Automatic** connection mode uses STUN and direct connections until this
+installation is activated. No project TURN access is required to create or accept a chat
+invitation. In Settings, choose **Custom servers** to use your own TURN, including an open
+server you trust; the application does not select a public TURN provider for you.
+
+To enable the project's TURN in an already installed copy, obtain a one-use activation
+code from the operator, open **Settings → Activation**, paste it and select **Activate**.
+The code expires seven days after issuance and activates one installation. A lost reply
+can be retried with the same code on the same installation. Activation applies to the
+next connection and preserves custom server settings and the current chat.
+
+Personal installers still activate automatically. Updates preserve the installation's
+access key. An activated installation reports credential-service errors explicitly;
+revocation is not bypassed by silently reverting to an unactivated connection mode.
+
 ## Key Security Aspects 🔒
 
 Desktop protocol v3 uses a committed X25519 exchange: each participant fixes its fresh

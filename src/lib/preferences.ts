@@ -13,7 +13,8 @@ export function savedNetworkMode(value: Record<string, unknown>): NetworkMode {
   throw new Error('Сохранённый режим подключения повреждён. Проверьте настройки.');
 }
 
-// Apply mode before a session. Managed TURN secrets are obtained in Rust, never stored here.
+// Project mode is automatic: Rust uses STUN until activation, then managed TURN.
+// Apply it before a session; managed TURN credentials never enter this module.
 export async function applySavedIceServers(): Promise<void> {
   const saved = localStorage.getItem('ssc-settings');
   if (!saved) {

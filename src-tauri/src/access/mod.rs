@@ -199,7 +199,7 @@ async fn activate(
     let bytes = storage::read(&path.join("bootstrap.json"), false)?.ok_or_else(|| {
         error(
             "access_activation_required",
-            "Нужен персональный установщик с действующей активацией или свой TURN",
+            "Для TURN проекта нужен код активации или персональный установщик",
             true,
         )
     })?;
@@ -220,6 +220,16 @@ async fn activate(
             true,
         ));
     }
+    activate_token(path, origin, client, &bootstrap.bootstrap_token, current).await
+}
+
+async fn activate_token(
+    path: &std::path::Path,
+    origin: &str,
+    client: &Client,
+    token: &str,
+    current: Option<Identity>,
+) -> Result<Identity, AppError> {
     let mut identity = if let Some(current) = current {
         current
     } else {
@@ -239,12 +249,18 @@ async fn activate(
     };
     let key = identity.key()?;
     let public = B64.encode(key.public_key().as_ref());
-    let message = format!(
+    let message = Zeroizing::new(format!(
         "ssc-access-v1\nactivate\n{origin}\n{}\n{public}\n",
-        bootstrap.bootstrap_token
-    );
+        token
+    ));
     let signature = B64.encode(key.sign(message.as_bytes()).as_ref());
-    let response: Activated = post(client, origin, "/v1/access/activate", &serde_json::json!({"token":bootstrap.bootstrap_token,"public_key":public,"signature":signature})).await?;
+    let response: Activated = post(
+        client,
+        origin,
+        "/v1/access/activate",
+        &serde_json::json!({"token":token,"public_key":public,"signature":signature}),
+    )
+    .await?;
     if response.state != "active" || response.device_id != identity.device_id()? {
         return Err(malformed());
     }
@@ -454,6 +470,45 @@ fn access_status(result: Result<Option<Identity>, AppError>) -> AccessStatus {
             error: Some(e),
         },
     }
+}
+fn activation_code(code: &str) -> Result<Zeroizing<String>, AppError> {
+    let token = Zeroizing::new(code.trim().to_owned());
+    if !valid_token(&token) {
+        return Err(error(
+            "access_code_invalid",
+            "Код активации должен содержать 43 символа. Проверьте, что он скопирован полностью",
+            false,
+        ));
+    }
+    Ok(token)
+}
+async fn activate_manual(
+    path: &std::path::Path,
+    origin: &str,
+    client: &Client,
+    code: &str,
+) -> Result<Identity, AppError> {
+    let token = activation_code(code)?;
+    let _profile_lock = storage::lock(path)?;
+    let current = identity(path, origin)?;
+    if current.as_ref().is_some_and(|identity| identity.activated) {
+        return Err(error(
+            "access_already_active",
+            "Установка уже активирована. Перед заменой допуска сбросьте локальную активацию",
+            false,
+        ));
+    }
+    activate_token(path, origin, client, &token, current).await
+}
+#[tauri::command]
+pub async fn activate_access(code: String) -> Result<AccessStatus, AppError> {
+    let code = Zeroizing::new(code);
+    // Validate before waiting for another activation or opening any storage.
+    let token = activation_code(&code)?;
+    let _guard = ACCESS.lock().await;
+    let (origin, client) = crate::connect::http::access_config()?;
+    let identity = activate_manual(&profile()?, &origin, &client, &token).await?;
+    Ok(access_status(Ok(Some(identity))))
 }
 #[tauri::command]
 pub async fn initialize_access() -> AccessStatus {

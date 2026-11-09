@@ -80,7 +80,9 @@ try {
   }
   for (const peer of sessions) {
     await until(() => visible(peer, 'Начать чат'), 'welcome');
-    await ipc(peer, 'set_ice_servers', { servers: [] });
+    if (process.env.SSC_TEST_AUTOMATIC === '1') {
+      if ((await ipc(peer, 'get_access_status')).state !== 'inactive') throw new Error('Automatic route test requires an unactivated generic profile');
+    } else await ipc(peer, 'set_ice_servers', { servers: [] });
     await ipc(peer, 'set_diagnostics', { enabled: true });
     await openLinkPage(peer);
   }
@@ -92,6 +94,7 @@ try {
   await send(sessions[0], sessions[1], 'native short-link hello 🦀');
   await send(sessions[1], sessions[0], 'native short-link reply 🦀');
   console.log('PASS real service + pasted link + automatic answer + mandatory SAS');
+  if (process.env.SSC_TEST_AUTOMATIC === '1') console.log('PASS unactivated default automatic mode without project TURN or manual server configuration');
   console.log('PASS bidirectional chat with the helper stopped');
   for (const peer of sessions) {
     const report = JSON.stringify(await ipc(peer, 'get_diagnostics'));

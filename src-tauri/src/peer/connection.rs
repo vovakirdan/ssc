@@ -35,6 +35,16 @@ pub fn rtc_config(servers: Option<Vec<ServerConfig>>) -> RTCConfiguration {
         ..Default::default()
     }
 }
+// An unactivated generic install can use P2P. A known access failure must remain visible.
+pub(super) fn project_or_stun(
+    result: Result<Vec<ServerConfig>, AppError>,
+) -> Result<Vec<ServerConfig>, AppError> {
+    match result {
+        Ok(servers) => Ok(servers),
+        Err(error) if error.code == "access_activation_required" => Ok(default_servers()),
+        Err(error) => Err(error),
+    }
+}
 pub async fn new_peer(
     session: &Arc<Session>,
     initiator: bool,
@@ -42,7 +52,7 @@ pub async fn new_peer(
     let servers = lock(&MANAGER).servers.clone();
     let servers = match servers {
         Some(servers) => servers,
-        None => crate::access::managed_servers().await?,
+        None => project_or_stun(crate::access::managed_servers().await)?,
     };
     session.ensure_active()?;
     let config = rtc_config(Some(servers));

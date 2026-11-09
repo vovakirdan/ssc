@@ -23,6 +23,13 @@ it('new installations choose project mode and initialize access without receivin
   await applySavedIceServers();
   expect(native.invoke.mock.calls).toEqual([['set_network_mode', { mode: 'project' }], ['initialize_access']]);
 });
+it('an inactive installation remains ready in automatic mode without changing its settings', async () => {
+  native.invoke.mockImplementation(async (name: string) => name === 'initialize_access' ? { state: 'inactive' } : true);
+  await expect(applySavedIceServers()).resolves.toBeUndefined();
+  expect(native.invoke).toHaveBeenCalledWith('set_network_mode', { mode: 'project' });
+  expect(native.invoke).not.toHaveBeenCalledWith('set_ice_servers', expect.anything());
+  expect(localStorage.getItem('ssc-settings')).toBeNull();
+});
 it('explicit disabled mode preserves its custom list without applying it', async () => {
   const servers = [{ id: 'saved', type: 'turn', url: 'turn:saved.example' }];
   localStorage.setItem('ssc-settings', JSON.stringify({ networkMode: 'disabled', servers }));

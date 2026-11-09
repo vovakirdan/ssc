@@ -3,7 +3,7 @@
 import { resolve } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { request, execute, ipc, until, click, input, visible } from './webdriver.mjs';
 const run = promisify(execFile);
 const sessions = [];
@@ -12,6 +12,9 @@ let stage = 'startup';
 let helperStopped = false;
 let revocationObserved = false;
 const transport = process.env.SSC_TURN_TRANSPORT || 'udp';
+const activationProfiles = process.env.SSC_ACTIVATION_PROFILES ? JSON.parse(process.env.SSC_ACTIVATION_PROFILES) : null;
+const accessReferences = [];
+if (activationProfiles && (!Array.isArray(activationProfiles) || activationProfiles.length !== 2 || !activationProfiles.every(path => typeof path === 'string'))) throw new Error('Invalid activation test inputs');
 if (!['udp', 'tcp', 'tls'].includes(transport)) throw new Error('Unsupported test transport');
 function byLabel(peer, label) { return execute(peer, 'return document.querySelector(arguments[0])?.value ?? null', [`[aria-label="${label}"]`]); }
 function hasLabel(peer, label) { return execute(peer, 'return !!document.querySelector(arguments[0])', [`[aria-label="${label}"]`]); }
@@ -34,6 +37,28 @@ try {
   stage = 'automatic_activation';
   for (const peer of sessions) {
     await until(() => visible(peer, 'Начать чат'), 'welcome UI');
+    if (activationProfiles) {
+      stage = 'code_activation';
+      if ((await ipc(peer, 'get_access_status')).state !== 'inactive') throw new Error('Code activation requires a fresh generic profile');
+      const token = JSON.parse(readFileSync(activationProfiles[sessions.indexOf(peer)], 'utf8')).bootstrap_token;
+      if (typeof token !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(token)) throw new Error('Invalid activation test code');
+      secrets.push(token);
+      await ipc(peer, 'set_diagnostics', { enabled: true });
+      await click(peer, 'Настройки');
+      await until(() => hasLabel(peer, 'Код активации'), 'activation code form');
+      await until(() => execute(peer, 'return document.querySelector(\'[aria-label="Код активации"]\')?.disabled === false'), 'activation code form ready');
+      await input(peer, '[aria-label="Код активации"]', token);
+      await click(peer, 'Активировать');
+      await until(async () => (await ipc(peer, 'get_access_status')).state === 'active', 'code activation');
+      const access = await ipc(peer, 'get_access_status');
+      accessReferences.push(access.access_reference);
+      if (process.env.SSC_ACTIVATION_REFERENCES_FILE) writeFileSync(process.env.SSC_ACTIVATION_REFERENCES_FILE, JSON.stringify(accessReferences), { mode: 0o600 });
+      await until(async () => !(await byLabel(peer, 'Код активации')), 'activation input cleared');
+      const saved = await execute(peer, 'return JSON.stringify(localStorage)');
+      if (saved.includes(token)) throw new Error('Activation code persisted in frontend storage');
+      await click(peer, 'Сохранить настройки');
+      await until(() => visible(peer, 'Начать чат'), 'return from activation');
+    }
     const access = await ipc(peer, 'initialize_access');
     if (access.state !== 'active') throw new Error(JSON.stringify(access.error || { code: 'activation_not_active' }));
     // Do not fetch get_ice_servers: it can contain credentials in custom mode.
@@ -42,7 +67,7 @@ try {
     await clickLabel(peer, 'Подключиться по короткой ссылке');
     await until(() => hasLabel(peer, 'Ссылка приглашения'), 'link form');
   }
-  console.log(`PASS ${transport} automatic activation of two isolated native clients`);
+  console.log(`PASS ${transport} ${activationProfiles ? 'UI code' : 'automatic'} activation of two isolated native clients`);
   stage = 'create_live_link';
   await click(sessions[0], 'Создать ссылку');
   await until(() => byLabel(sessions[0], 'Короткая ссылка'), 'live invitation');

@@ -16,6 +16,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             access::initialize_access,
+            access::activate_access,
             access::get_access_status,
             access::reset_access,
             peer::connection::set_network_mode,
