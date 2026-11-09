@@ -62,6 +62,9 @@ webview_ok:
   File "ssc.exe"
   StrCpy $SSCProfile "$APPDATA\com.vladimirkirdan.ssc"
   CreateDirectory "$SSCProfile"
+  ; An intermediate NSIS process otherwise forwards pwsh 7's module search path
+  ; to Windows PowerShell 5, which can break its module autoloading at startup.
+  System::Call 'kernel32::SetEnvironmentVariableW(w "PSModulePath", p 0) i .r0'
   nsExec::ExecToStack /TIMEOUT=30000 '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\protect-profile.ps1" -Path "$SSCProfile"'
   Pop $0
   Pop $1
