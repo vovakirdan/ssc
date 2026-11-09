@@ -149,7 +149,7 @@ export class BrowserChat {
     const seed = entropy(32), nonce = entropy(32);
     try { this.protocol = new module.ProtocolSession(id, initiator, seed, nonce); }
     finally { seed.fill(0); nonce.fill(0); }
-    this.pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, ...servers], bundlePolicy: 'max-bundle' });
+    this.pc = new RTCPeerConnection({ iceServers: servers, bundlePolicy: 'max-bundle' });
     const pc = this.pc;
     pc.onconnectionstatechange = () => {
       if (this.closed) return;
