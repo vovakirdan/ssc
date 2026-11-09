@@ -10,12 +10,13 @@ $failed = $false
 $script:lastInstallerResult = 'not_started'
 function Invoke-BoundedInstaller([string]$Executable,[int]$TimeoutSeconds) {
     $process = Start-Process -FilePath $Executable -ArgumentList '/S' -PassThru
+    # Cache the native handle: PowerShell otherwise can lose ExitCode after an async wait.
+    [void]$process.Handle
     if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
         & "$env:WINDIR\System32\taskkill.exe" /PID $process.Id /T /F *> $null
         $script:lastInstallerResult = 'timeout'
         throw 'Installer wait timed out'
     }
-    $process.Refresh()
     $script:lastInstallerResult = [string]$process.ExitCode
     if ($process.ExitCode -ne 0) { throw 'Installer returned failure' }
 }
