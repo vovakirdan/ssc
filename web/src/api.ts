@@ -34,6 +34,9 @@ function allowedTurnUrl(value: unknown): value is string {
   return ['127.0.0.1', 'localhost', '[::1]'].includes(location.hostname) && fixtureTurnUrls.has(value);
 }
 const errors = new Set(['room_unavailable', 'conflict', 'offer_pending', 'not_ready', 'rate_limited', 'capacity']);
+function temporaryStatus(status: number): string | null {
+  return status === 429 ? 'rate_limited' : status === 503 ? 'capacity' : status === 502 || status === 504 ? 'network' : null;
+}
 export class RoomsApi {
   constructor(private readonly signal: AbortSignal) {}
   private async request(path: string, method: string, body?: unknown, token?: string, idempotency?: string): Promise<unknown> {
@@ -48,6 +51,12 @@ export class RoomsApi {
         headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(idempotency ? { 'Idempotency-Key': idempotency } : {}) },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       });
+      // Proxies can return HTML for temporary failures. HTTP status remains authoritative.
+      const retryCode = temporaryStatus(response.status);
+      if (retryCode) {
+        void response.body?.cancel().catch(() => undefined);
+        throw new RoomError(retryCode);
+      }
       const reader = response.body?.getReader();
       if (!reader) throw new RoomError('invalid_response');
       const chunks: Uint8Array[] = []; let size = 0;
@@ -102,6 +111,33 @@ export class RoomsApi {
     });
   }
   async end(room: RoomAccess, keepalive = false): Promise<void> {
-    try { await fetch(`/v1/rooms/${room.id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${room.token}` }, credentials: 'omit', cache: 'no-store', redirect: 'error', referrerPolicy: 'no-referrer', keepalive }); } catch { /* The local session is destroyed even when offline. */ }
+    // Cleanup survives the already-aborted session signal; the UI retires immediately.
+    const path = `/v1/rooms/${room.id}`, authorization = `Bearer ${room.token}`;
+    const controller = new AbortController();
+    const deadline = performance.now() + 5000;
+    const timer = keepalive ? undefined : setTimeout(() => controller.abort(), 5000);
+    try {
+      for (let attempt = 0; attempt < (keepalive ? 1 : 3); attempt++) {
+        if (!keepalive && (controller.signal.aborted || performance.now() >= deadline)) return;
+        try {
+          const response = await fetch(path, {
+            method: 'DELETE', headers: { Authorization: authorization }, credentials: 'omit', cache: 'no-store', redirect: 'error', referrerPolicy: 'no-referrer', keepalive,
+            ...(keepalive ? {} : { signal: controller.signal }),
+          });
+          void response.body?.cancel().catch(() => undefined);
+          // Includes success, already-closed404 and permanent client errors.
+          if (!temporaryStatus(response.status)) return;
+        } catch { if (controller.signal.aborted) return; }
+        if (keepalive || attempt === 2) return;
+        const remaining = deadline - performance.now();
+        if (remaining <= 0) return;
+        await new Promise<void>(resolve => {
+          const done = () => { clearTimeout(delay); controller.signal.removeEventListener('abort', done); resolve(); };
+          const delay = setTimeout(done, Math.min(attempt === 0 ? 500 : 1000, remaining));
+          controller.signal.addEventListener('abort', done, { once: true });
+          if (controller.signal.aborted) done();
+        });
+      }
+    } finally { clearTimeout(timer); }
   }
 }

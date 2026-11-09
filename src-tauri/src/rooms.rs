@@ -47,6 +47,8 @@ const JOIN_TTL: Duration = Duration::from_secs(5 * 60);
 const SESSION_TTL: Duration = Duration::from_secs(60 * 60);
 const MAX_TTL: Duration = Duration::from_secs(65 * 60);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+const POLL_INTERVAL: Duration = Duration::from_secs(2);
+const CLEANUP_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Wall time is for display; pinned monotonic limits cannot be extended by clock rollback.
 struct Deadlines {
@@ -118,7 +120,12 @@ impl Deadlines {
         Ok(())
     }
 }
+fn retryable_room_status(status: u16) -> bool {
+    matches!(status, 429 | 502 | 503 | 504)
+}
+
 enum RequestError {
+    PollTransient,
     Retry,
     Response,
     Denied,
@@ -208,6 +215,36 @@ impl Operation {
         body: Option<Value>,
         key: Option<&str>,
     ) -> Result<Value, AppError> {
+        self.request_mode(s, method, path, body, key, false).await
+    }
+    async fn poll(&self, s: &Session, path: &str) -> Result<Value, AppError> {
+        loop {
+            match self
+                .request_mode(s, Method::GET, path, None, None, true)
+                .await
+            {
+                Ok(value) => return Ok(value),
+                Err(error) if error.code == "room_poll_transient" => {
+                    let deadline = self.lease()?;
+                    tokio::select! {biased;
+                        _=s.stopped()=>return Err(failure("room_closed")),
+                        _=tokio::time::sleep_until(deadline.into())=>return Err(failure("room_expired")),
+                        _=tokio::time::sleep(POLL_INTERVAL)=>{},
+                    }
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+    async fn request_mode(
+        &self,
+        s: &Session,
+        method: Method,
+        path: &str,
+        body: Option<Value>,
+        key: Option<&str>,
+        polling: bool,
+    ) -> Result<Value, AppError> {
         let cap = Zeroizing::new(lock(&self.data).cap.to_string());
         for attempt in 0..3 {
             s.ensure_active()?;
@@ -226,6 +263,9 @@ impl Operation {
             }
             let exchange = async {
                 let response = request.send().await.map_err(|_| RequestError::Retry)?;
+                if polling && retryable_room_status(response.status().as_u16()) {
+                    return Err(RequestError::PollTransient);
+                }
                 if response.status().is_server_error() || response.status().as_u16() == 429 {
                     return Err(RequestError::Retry);
                 }
@@ -249,6 +289,7 @@ impl Operation {
             };
             match result {
                 Ok(value) => return Ok(value),
+                Err(RequestError::PollTransient) => return Err(failure("room_poll_transient")),
                 Err(RequestError::Response) => return Err(failure("room_response")),
                 Err(RequestError::Denied) => return Err(failure("room_unavailable")),
                 Err(RequestError::Retry) if attempt == 2 => {
@@ -264,6 +305,29 @@ impl Operation {
             }
         }
         Err(failure("room_unavailable"))
+    }
+    // The room is already retired locally; this independent DELETE may safely
+    // repeat, while its total budget bounds capability lifetime and shutdown work.
+    async fn cleanup(&self, id: &str, cap: &str) {
+        let cleanup = async {
+            for attempt in 0..3 {
+                let retry = match self
+                    .client
+                    .delete(format!("{}/v1/rooms/{id}", self.origin))
+                    .bearer_auth(cap)
+                    .send()
+                    .await
+                {
+                    Ok(response) => retryable_room_status(response.status().as_u16()),
+                    Err(_) => true,
+                };
+                if !retry || attempt == 2 {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+        };
+        let _ = tokio::time::timeout(CLEANUP_TIMEOUT, cleanup).await;
     }
     fn lease(&self) -> Result<Instant, AppError> {
         let data = lock(&self.data);
@@ -383,12 +447,7 @@ pub fn retire(s: &Session) {
         }
         if !id.is_empty() && !cap.is_empty() {
             tauri::async_runtime::spawn(async move {
-                let _ = room
-                    .client
-                    .delete(format!("{}/v1/rooms/{id}", room.origin))
-                    .bearer_auth(cap.as_str())
-                    .send()
-                    .await;
+                room.cleanup(&id, cap.as_str()).await;
             });
         }
     }
@@ -500,9 +559,7 @@ async fn run(s: &Arc<Session>, room: &Arc<Operation>, input: Input) -> Result<()
         s.ensure_active()?;
         room.lease()?;
         if !remote_set {
-            let value = room
-                .request(s, Method::GET, &room.path("/answer"), None, None)
-                .await?;
+            let value = room.poll(s, &room.path("/answer")).await?;
             room.metadata(&value)?;
             if let Some(answer) = value["answer"].as_str() {
                 remote(s, checked_answer(s, answer)?).await?;
@@ -524,12 +581,10 @@ async fn run(s: &Arc<Session>, room: &Arc<Operation>, input: Input) -> Result<()
             started = true;
             room.stage(s, LinkPhase::Complete);
         } else {
-            let value = room
-                .request(s, Method::GET, &room.path(""), None, None)
-                .await?;
+            let value = room.poll(s, &room.path("")).await?;
             room.metadata(&value)?;
         }
-        tokio::select! {_=s.stopped()=>return Ok(()),_=tokio::time::sleep(Duration::from_secs(2))=>{}}
+        tokio::select! {_=s.stopped()=>return Ok(()),_=tokio::time::sleep(POLL_INTERVAL)=>{}}
     }
 }
 async fn expiry_watch(s: Arc<Session>, room: Arc<Operation>) {

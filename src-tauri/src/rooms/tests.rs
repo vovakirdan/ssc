@@ -456,3 +456,248 @@ async fn retry_budget_is_exactly_three_requests_even_for_rate_limits() {
     fixture.done.await.unwrap();
     assert_eq!(lock(&fixture.requests).len(), 3);
 }
+
+fn transient_html(status: u16) -> String {
+    let body = "<html>temporary proxy response</html>";
+    format!("HTTP/1.1 {status} response\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len())
+}
+#[tokio::test]
+async fn poll_retries_non_json_transient_statuses_beyond_the_mutation_retry_budget() {
+    let mut origin = String::new();
+    let expires = Utc::now() + chrono::Duration::hours(1);
+    let response = metadata("connected", Some(expires));
+    let fixture = mock(|url| {
+        origin = url.into();
+        vec![
+            transient_html(429),
+            transient_html(502),
+            transient_html(503),
+            transient_html(504),
+            json_response(200, response.clone()),
+        ]
+    })
+    .await;
+    let room = operation(&origin, 90100);
+    room.metadata(&response).unwrap();
+    room.receipt(&tok(2), None).unwrap();
+    let deadline = lock(&room.data).timing.mono;
+    let s = Session::new(room.generation, "3".repeat(32), None);
+    lock(&s.data)
+        .inbox
+        .push(crate::peer::state::ReceivedMessage {
+            generation: s.generation,
+            id: "1".into(),
+            text: "existing conversation".into(),
+        });
+    let started = Instant::now();
+    let value = tokio::time::timeout(Duration::from_secs(20), room.poll(&s, &room.path("")))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        started.elapsed() >= POLL_INTERVAL * 4,
+        "polling retried faster than the established cadence"
+    );
+    room.metadata(&value).unwrap();
+    assert_eq!(lock(&room.data).timing.mono, deadline);
+    assert!(s.active());
+    assert_eq!(lock(&s.data).inbox.len(), 1);
+    fixture.done.await.unwrap();
+    let requests = lock(&fixture.requests);
+    assert_eq!(requests.len(), 5);
+    for request in requests.iter() {
+        let text = String::from_utf8_lossy(request);
+        assert!(text.starts_with(&format!("GET /v1/rooms/{} ", tok(1))));
+        assert!(text
+            .to_lowercase()
+            .contains(&format!("authorization: bearer {}", tok(2)).to_lowercase()));
+    }
+}
+#[tokio::test]
+async fn poll_never_retries_fatal_statuses_or_invalid_success_responses() {
+    for (reply,code) in [
+        (transient_html(400),"room_unavailable"),(transient_html(401),"room_unavailable"),(transient_html(404),"room_unavailable"),
+        (transient_html(200),"room_response"),
+        ("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 1\r\nConnection: close\r\n\r\n{".into(),"room_response"),
+    ] {
+        let mut origin=String::new();let fixture=mock(|url|{origin=url.into();vec![reply,json_response(200,metadata("waiting",None))]}).await;
+        let room=operation(&origin,90101);let s=Session::new(room.generation,"4".repeat(32),None);
+        let error=room.poll(&s,&room.path("/answer")).await.unwrap_err();assert_eq!(error.code,code);assert_eq!(lock(&fixture.requests).len(),1);fixture.done.abort();
+    }
+    let mut origin = String::new();
+    let fixture = mock(|url| {
+        origin = url.into();
+        vec![
+            json_response(200, json!({"id":tok(1),"state":"waiting"})),
+            json_response(200, metadata("waiting", None)),
+        ]
+    })
+    .await;
+    let room = operation(&origin, 90102);
+    let s = Session::new(room.generation, "5".repeat(32), None);
+    let value = room.poll(&s, &room.path("")).await.unwrap();
+    assert_eq!(room.metadata(&value).unwrap_err().code, "room_response");
+    assert_eq!(lock(&fixture.requests).len(), 1);
+    fixture.done.abort();
+}
+#[tokio::test]
+async fn poll_backoff_is_cancelled_without_another_http_request() {
+    let mut origin = String::new();
+    let fixture = mock(|url| {
+        origin = url.into();
+        vec![transient_html(429)]
+    })
+    .await;
+    let room = operation(&origin, 90103);
+    let s = Session::new(room.generation, "6".repeat(32), None);
+    let path = room.path("");
+    let requested = room.poll(&s, &path);
+    let cancel = async {
+        fixture.done.await.unwrap();
+        s.close().await;
+    };
+    let (result, _) = tokio::time::timeout(Duration::from_secs(2), async {
+        tokio::join!(requested, cancel)
+    })
+    .await
+    .unwrap();
+    assert!(matches!(
+        result.unwrap_err().code.as_str(),
+        "room_closed" | "session_closed"
+    ));
+    assert_eq!(lock(&fixture.requests).len(), 1);
+    assert!(!s.active());
+}
+#[tokio::test]
+async fn independent_monotonic_expiry_closes_a_session_during_transient_poll_backoff() {
+    let _global = GLOBAL.lock().await;
+    let mut origin = String::new();
+    let fixture = mock(|url| {
+        origin = url.into();
+        vec![transient_html(503)]
+    })
+    .await;
+    let room = operation(&origin, 90104);
+    let s = Session::new(room.generation, "7".repeat(32), None);
+    *lock(&ROOM) = Some(room.clone());
+    let path = room.path("");
+    let requested = room.poll(&s, &path);
+    let expire = async {
+        fixture.done.await.unwrap();
+        lock(&room.data).timing.mono = Instant::now() + Duration::from_millis(100);
+        expiry_watch(s.clone(), room.clone()).await;
+    };
+    let (result, _) = tokio::time::timeout(Duration::from_secs(2), async {
+        tokio::join!(requested, expire)
+    })
+    .await
+    .unwrap();
+    assert!(matches!(
+        result.unwrap_err().code.as_str(),
+        "room_expired" | "room_closed" | "session_closed"
+    ));
+    assert!(!s.active());
+    assert_eq!(lock(&fixture.requests).len(), 1);
+    assert!(lock(&room.data).retired);
+    *lock(&ROOM) = None;
+}
+
+#[tokio::test]
+async fn local_retirement_is_immediate_and_cleanup_retries_transient_delete_responses() {
+    let _global = GLOBAL.lock().await;
+    let mut origin = String::new();
+    let fixture = mock(|url| {
+        origin = url.into();
+        vec![
+            transient_html(429),
+            transient_html(503),
+            json_response(204, Value::Null),
+        ]
+    })
+    .await;
+    let room = operation(&origin, 90105);
+    room.receipt(&tok(2), Some("private invitation")).unwrap();
+    let s = Session::new(room.generation, "8".repeat(32), None);
+    *lock(&ROOM) = Some(room.clone());
+    s.close().await;
+    assert!(!s.active());
+    assert!(lock(&room.data).retired);
+    assert!(lock(&room.data).cap.is_empty());
+    assert!(room.snapshot().url.is_none());
+    tokio::time::timeout(Duration::from_secs(4), fixture.done)
+        .await
+        .unwrap()
+        .unwrap();
+    let requests = lock(&fixture.requests);
+    assert_eq!(requests.len(), 3);
+    assert_eq!(requests[0], requests[1]);
+    assert_eq!(requests[1], requests[2]);
+    let request = String::from_utf8_lossy(&requests[0]);
+    assert!(request.starts_with(&format!("DELETE /v1/rooms/{} ", tok(1))));
+    assert!(request
+        .to_lowercase()
+        .contains(&format!("authorization: bearer {}", tok(2)).to_lowercase()));
+    *lock(&ROOM) = None;
+}
+#[tokio::test]
+async fn cleanup_retries_network_loss_but_never_fatal_statuses() {
+    let mut origin = String::new();
+    let fixture = mock(|url| {
+        origin = url.into();
+        vec![String::new(), json_response(204, Value::Null)]
+    })
+    .await;
+    let room = operation(&origin, 90106);
+    room.cleanup(&tok(1), &tok(2)).await;
+    fixture.done.await.unwrap();
+    assert_eq!(lock(&fixture.requests).len(), 2);
+    for status in [400, 401, 404, 500] {
+        let mut origin = String::new();
+        let fixture = mock(|url| {
+            origin = url.into();
+            vec![transient_html(status), json_response(204, Value::Null)]
+        })
+        .await;
+        let room = operation(&origin, 90107);
+        room.cleanup(&tok(1), &tok(2)).await;
+        assert_eq!(lock(&fixture.requests).len(), 1);
+        fixture.done.abort();
+    }
+}
+#[tokio::test]
+async fn cleanup_stops_after_three_transient_responses() {
+    let mut origin = String::new();
+    let fixture = mock(|url| {
+        origin = url.into();
+        vec![
+            transient_html(502),
+            transient_html(504),
+            transient_html(429),
+            json_response(204, Value::Null),
+        ]
+    })
+    .await;
+    let room = operation(&origin, 90108);
+    room.cleanup(&tok(1), &tok(2)).await;
+    assert_eq!(lock(&fixture.requests).len(), 3);
+    fixture.done.abort();
+}
+#[tokio::test]
+async fn cleanup_has_one_five_second_budget_even_with_a_hung_server() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut data = [0; 4096];
+        let _ = stream.read(&mut data).await.unwrap();
+        std::future::pending::<()>().await;
+        drop(stream);
+    });
+    let room = operation(&origin, 90109);
+    let started = Instant::now();
+    tokio::time::timeout(Duration::from_secs(6), room.cleanup(&tok(1), &tok(2)))
+        .await
+        .expect("cleanup exceeded its total budget");
+    assert!(started.elapsed() >= CLEANUP_TIMEOUT);
+    server.abort();
+}

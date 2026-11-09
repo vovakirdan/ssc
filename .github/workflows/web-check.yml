@@ -87,6 +87,21 @@ jobs:
           done
           curl --fail --silent --output /dev/null "$SSC_WEB_TEST_URL"
           npx --no-install playwright test web/tests/protocol.spec.ts --config web/playwright.config.ts --project=chromium --reporter=line
+      - name: Check browser HTTP boundary regressions
+        env:
+          SSC_WEB_TEST_URL: http://127.0.0.1:1431
+        run: |
+          set -euo pipefail
+          ./node_modules/.bin/vite --config web/vite.config.ts --host 127.0.0.1 --port 1431 --strictPort > "$RUNNER_TEMP/ssc-web-api-boundary.log" 2>&1 &
+          web_boundary_pid=$!
+          trap 'kill "$web_boundary_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --output /dev/null "$SSC_WEB_TEST_URL"; then break; fi
+            if ! kill -0 "$web_boundary_pid" 2>/dev/null; then exit 1; fi
+            sleep 1
+          done
+          curl --fail --silent --output /dev/null "$SSC_WEB_TEST_URL"
+          npx --no-install playwright test web/tests/api.spec.ts --config web/playwright.config.ts --project=chromium --reporter=line
       - name: Package only checked public static files
         run: node scripts/packaging/build-web.mjs web/dist generic
       - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4
