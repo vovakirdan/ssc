@@ -21,7 +21,9 @@ test('rejects unsafe, expired, noncanonical or foreign bootstrap input without e
   for(const change of [{helper_origin:'https://evil.example'},{expires_at:'2000-01-01T00:00:00Z'},{bootstrap_token:'bad'},{version:2},{extra:'ignored'}]){
     writeFileSync(f.profile,JSON.stringify({...f.data,...change}));assert.throws(()=>validateBootstrap(f.profile));
   }
-  writeFileSync(f.profile,JSON.stringify(f.data));chmodSync(f.profile,0o644);assert.throws(()=>validateBootstrap(f.profile));
+  if (process.platform !== 'win32') {
+    writeFileSync(f.profile,JSON.stringify(f.data));chmodSync(f.profile,0o644);assert.throws(()=>validateBootstrap(f.profile));
+  }
 });
 test('Linux personal installer installs, updates safely and uninstalls while retaining access',t=>{
   if(process.platform!=='linux'||process.getuid()===0){t.skip('requires a non-root Linux user');return;}
