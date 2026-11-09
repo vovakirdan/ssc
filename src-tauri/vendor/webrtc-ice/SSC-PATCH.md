@@ -53,3 +53,31 @@ routes and two-sided SAS. The initial pre-patch TCP/TLS failures are not passes.
 The upstream ping-pong example only uses HTTP/1. Its Hyper dev features were narrowed
 from full to client/server/http1/tcp to remove the unused vulnerable h2 0.3 graph.
 The standalone lockfile was refreshed, including patched bytes.
+
+## Opt-in TURN control summaries
+
+`turn_diagnostics::TraceConn` delegates the existing TURN control connection
+unchanged, including payload bytes, addresses and underlying connection type.
+With diagnostics disabled (the default), packet inspection is skipped. The
+application's existing debug switch enables the bounded in-memory summary;
+disabling or clearing diagnostics removes it. No Rust/WebRTC raw logger is enabled.
+
+The summary retains only fixed transport/direction/method/class labels, selected
+numeric STUN error codes, packet counts and relative first/last times. It never
+reads transaction IDs into diagnostic state and never retains addresses,
+usernames, realms, nonces, credentials, SDP or payload bytes. At most 128 groups
+are stored. The summary is process-wide since enable/clear; callers should clear
+it before a diagnostic attempt if they need a fresh interval.
+
+Tests check default-off behavior, metadata redaction and actual loopback UDP
+payload/address forwarding. The standalone ICE manifest patches the same local
+TURN source as the desktop application; its transaction timeout patch is
+explained in `../turn/SSC_PATCH.md`.
+
+Opaque datagrams are counted as fixed `dtls_record`, `other_datagram` or
+`malformed_stun` labels; no payload or record sequence is retained. Incoming
+rows additionally expose `from_server: true|false|null`. The wrapper learns the
+configured TURN control endpoint from the existing outbound send destination
+and compares the incoming source internally. No peer address enters the
+summary. Outgoing rows use null; null also means the expected endpoint was not
+yet known. This comparison does not filter, connect or redirect the socket.

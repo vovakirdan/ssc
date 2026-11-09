@@ -69,6 +69,7 @@ jobs:
           cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
           cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings
           cargo test --manifest-path src-tauri/Cargo.toml --locked --lib
+          CARGO_TARGET_DIR="$RUNNER_TEMP/turn-target" cargo test --manifest-path src-tauri/vendor/turn/Cargo.toml --locked --lib ssc_
       - name: Build Linux AppImage
         if: runner.os == 'Linux'
         run: |

@@ -9,7 +9,7 @@ use std::{sync::Arc, time::Duration};
 use webrtc::{
     api::APIBuilder,
     data_channel::{data_channel_init::RTCDataChannelInit, RTCDataChannel},
-    ice_transport::ice_server::RTCIceServer,
+    ice_transport::{ice_connection_state::RTCIceConnectionState, ice_server::RTCIceServer},
     peer_connection::{
         configuration::RTCConfiguration, peer_connection_state::RTCPeerConnectionState,
         RTCPeerConnection,
@@ -120,6 +120,31 @@ pub(crate) async fn new_peer_with_servers(
                         });
                     }
                 }
+            }
+        })
+    }));
+    let weak = Arc::downgrade(session);
+    pc.on_ice_connection_state_change(Box::new(move |state| {
+        let weak = weak.clone();
+        Box::pin(async move {
+            if let Some(session) = weak.upgrade().filter(|session| session.active()) {
+                let code = match state {
+                    RTCIceConnectionState::New => "new",
+                    RTCIceConnectionState::Checking => "checking",
+                    RTCIceConnectionState::Connected => "connected",
+                    RTCIceConnectionState::Completed => "completed",
+                    RTCIceConnectionState::Disconnected => "disconnected",
+                    RTCIceConnectionState::Failed => "failed",
+                    RTCIceConnectionState::Closed => "closed",
+                    _ => "unknown",
+                };
+                crate::diagnostics::record(
+                    session.generation,
+                    "ice",
+                    "transport",
+                    "state",
+                    Some(code),
+                );
             }
         })
     }));

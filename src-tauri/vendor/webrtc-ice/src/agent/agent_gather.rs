@@ -818,6 +818,15 @@ impl Agent {
                         return Ok(());
                     };
 
+                let transport = if url.proto == ProtoType::Udp {
+                    crate::turn_diagnostics::Transport::Udp
+                } else if url.scheme == SchemeType::Turns {
+                    crate::turn_diagnostics::Transport::Tls
+                } else {
+                    crate::turn_diagnostics::Transport::Tcp
+                };
+                let loc_conn =
+                    Arc::new(crate::turn_diagnostics::TraceConn::new(loc_conn, transport));
                 let cfg = turn::client::ClientConfig {
                     stun_serv_addr: String::new(),
                     // Pin the selected stream peer instead of resolving a second address.

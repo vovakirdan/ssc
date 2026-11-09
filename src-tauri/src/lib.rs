@@ -44,6 +44,7 @@ pub fn run() {
             peer::connection::set_ice_servers,
             peer::connection::get_ice_servers,
             diagnostics::get_diagnostics,
+            diagnostics::transport::get_transport_diagnostics,
             diagnostics::set_diagnostics,
             diagnostics::clear_diagnostics,
         ])

@@ -1,3 +1,5 @@
+pub mod transport;
+
 use crate::peer::state::lock;
 use once_cell::sync::Lazy;
 use serde::Serialize;
@@ -47,6 +49,10 @@ pub fn record(session_id: u64, component: &str, stage: &str, outcome: &str, code
         code: code.map(identifier),
     });
 }
+fn enabled() -> bool {
+    lock(&BUFFER).enabled
+}
+
 #[tauri::command]
 pub fn get_diagnostics() -> Diagnostics {
     let b = lock(&BUFFER);
@@ -59,6 +65,7 @@ pub fn get_diagnostics() -> Diagnostics {
 pub fn set_diagnostics(enabled: bool) {
     let mut b = lock(&BUFFER);
     b.enabled = enabled;
+    webrtc::ice::turn_diagnostics::set_enabled(enabled);
     if !enabled {
         b.events.clear();
     }
@@ -66,6 +73,7 @@ pub fn set_diagnostics(enabled: bool) {
 #[tauri::command]
 pub fn clear_diagnostics() {
     lock(&BUFFER).events.clear();
+    webrtc::ice::turn_diagnostics::clear();
 }
 #[cfg(test)]
 mod tests {

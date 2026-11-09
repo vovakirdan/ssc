@@ -51,6 +51,11 @@ jobs:
           cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings
           cargo test --manifest-path src-tauri/Cargo.toml --locked --lib
           CARGO_TARGET_DIR="$RUNNER_TEMP/dtls-target" cargo test --manifest-path src-tauri/vendor/webrtc-dtls/Cargo.toml --locked --lib
+      - name: Vendored TURN transaction regressions
+        run: |
+          CARGO_TARGET_DIR="$RUNNER_TEMP/turn-target" cargo test --manifest-path src-tauri/vendor/turn/Cargo.toml --locked --lib ssc_
+          CARGO_TARGET_DIR="$RUNNER_TEMP/turn-target" cargo test --manifest-path src-tauri/vendor/turn/Cargo.toml --locked --lib test_client_nonce_expiration
+          CARGO_TARGET_DIR="$RUNNER_TEMP/turn-target" cargo test --manifest-path src-tauri/vendor/turn/Cargo.toml --locked --lib test_client_with_stun_send_binding_request_to_timeout
       - name: Vendored ICE transport tests
         run: CARGO_TARGET_DIR="$RUNNER_TEMP/ice-target" cargo test --manifest-path src-tauri/vendor/webrtc-ice/Cargo.toml --locked --lib
       - name: Rust dependency audit
@@ -60,3 +65,4 @@ jobs:
           cargo audit --file src-tauri/Cargo.lock
           cargo audit --file src-tauri/vendor/webrtc-dtls/Cargo.lock
           cargo audit --file src-tauri/vendor/webrtc-ice/Cargo.lock
+          cargo audit --file src-tauri/vendor/turn/Cargo.lock

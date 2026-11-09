@@ -19,5 +19,6 @@ pub mod url;
 pub mod use_candidate;
 pub mod util;
 mod turn_stream;
+pub mod turn_diagnostics;
 
 pub use error::Error;

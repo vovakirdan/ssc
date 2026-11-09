@@ -147,3 +147,6 @@ version = "1.0"
 
 [dev-dependencies.rcgen]
 version = "0.13.2"
+
+[patch.crates-io]
+turn = { path = "../turn" }
