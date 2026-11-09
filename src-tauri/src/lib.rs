@@ -4,6 +4,7 @@ mod connect;
 mod diagnostics;
 mod errors;
 mod peer;
+mod rooms;
 mod utils;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -28,6 +29,8 @@ pub fn run() {
             connect::retry_link_invitation,
             connect::cancel_link_invitation,
             connect::get_link_state,
+            rooms::create_temporary_room,
+            rooms::get_temporary_room_state,
             commands::util_api::send_text,
             commands::util_api::get_fingerprint,
             commands::util_api::is_connected,

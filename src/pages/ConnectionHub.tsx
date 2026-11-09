@@ -1,9 +1,9 @@
 import { ArrowLeft, ArrowRight, Link2, QrCode, ScanLine, ShieldCheck } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
-interface Props { onCreate: () => void; onJoin: () => void; onBack: () => void; onLink: () => void }
+interface Props { onCreate: () => void; onJoin: () => void; onBack: () => void; onLink: () => void; onTemporary?: () => void }
 
-export default function ConnectionHub({ onCreate, onJoin, onBack, onLink }: Props) {
+export default function ConnectionHub({ onCreate, onJoin, onBack, onLink, onTemporary }: Props) {
   return <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-800 text-white p-5 sm:p-8">
     <main className="max-w-2xl mx-auto space-y-7">
       <Button variant="ghost" onClick={onBack} className="text-slate-300 -ml-3"><ArrowLeft className="w-4 h-4 mr-2" />Назад</Button>
@@ -17,6 +17,7 @@ export default function ConnectionHub({ onCreate, onJoin, onBack, onLink }: Prop
         <div className="flex-1"><h2 className="text-slate-100 font-medium">По короткой ссылке</h2><p className="text-sm text-slate-400 mt-1">Создайте ссылку или вставьте полученную. Приложения обменяются ответом автоматически.</p></div>
         <ArrowRight className="w-5 h-5 text-cyan-400 mt-1 flex-shrink-0" />
       </button>
+      {onTemporary && <button type="button" onClick={onTemporary} aria-label="Временный чат без установки" className="w-full rounded-2xl border border-emerald-700 bg-emerald-950/30 p-5 text-left hover:bg-emerald-950/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400"><h2 className="font-medium">Временный чат без установки</h2><p className="mt-1 text-sm text-slate-300">Собеседник откроет ссылку в браузере. Вход — в течение 5 минут, разговор — до часа.</p></button>}
       <p className="text-sm text-slate-400">Или вручную — QR и коды</p>
       <div className="grid sm:grid-cols-2 gap-4">
         <button onClick={onCreate} className="group text-left rounded-2xl border border-emerald-700/60 bg-emerald-950/30 hover:bg-emerald-950/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 p-6 transition-colors">

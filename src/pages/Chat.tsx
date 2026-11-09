@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { MessageBubble } from '@/components/chat/MessageBubble';
 import type { Message } from '@/components/chat/types';
+import RoomExpiry from '@/components/RoomExpiry';
 import { errorMessage, nativeListener, phaseLabels, useSession } from '@/lib/session';
 
 export default function Chat({ onBack }: { onBack: () => void }) {
@@ -95,6 +96,7 @@ export default function Chat({ onBack }: { onBack: () => void }) {
       <Shield className="text-emerald-500" /><h1>Секретный чат</h1>
       <span role="status" className="ml-auto text-sm">{phaseLabels[session.phase]}</span>
     </header>
+    {session.phase !== 'closed' && <RoomExpiry generation={session.generation} />}
     {(error || sessionError) && <p role="alert" className="p-3 bg-red-950">{error || sessionError}</p>}
     <main className="flex-1 overflow-y-auto p-4"><div className="max-w-4xl mx-auto space-y-2">
       {messages.length === 0 && <p className="text-slate-400 text-center py-8">{session.phase === 'connected' ? 'Соединение установлено. Начните общение.' : phaseLabels[session.phase]}</p>}

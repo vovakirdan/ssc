@@ -367,7 +367,7 @@ fn retry_after(value: &str) -> Option<Duration> {
         Duration::from_secs(date.signed_duration_since(Utc::now()).num_seconds().max(0) as u64)
     })
 }
-async fn read_json<T: DeserializeOwned>(mut response: Response) -> Result<T, HttpError> {
+pub(crate) async fn read_json<T: DeserializeOwned>(mut response: Response) -> Result<T, HttpError> {
     let content_type = response
         .headers()
         .get(header::CONTENT_TYPE)

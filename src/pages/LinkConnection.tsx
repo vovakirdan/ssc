@@ -6,9 +6,9 @@ import { Input } from '@/components/ui/input';
 import { errorMessage } from '@/lib/session';
 import { type LinkSnapshot, linkPhaseLabels, useLinkState } from '@/lib/link';
 
-interface Props { onBack: () => void; ttl: number }
+interface Props { onBack: () => void; ttl: number; temporary?: boolean }
 
-export default function LinkConnection({ onBack, ttl }: Props) {
+export default function LinkConnection({ onBack, ttl, temporary = false }: Props) {
   const { snapshot, current, eventVersion, applyCommand, error: stateError } = useLinkState();
   const [url, setUrl] = useState('');
   const [pending, setPending] = useState(false);
@@ -61,7 +61,7 @@ export default function LinkConnection({ onBack, ttl }: Props) {
     }
   }
   async function create() {
-    await command('create_link_invitation', { ttlSeconds: ttl * 60 }, true);
+    await command(temporary ? 'create_temporary_room' : 'create_link_invitation', temporary ? {} : { ttlSeconds: ttl * 60 }, true);
   }
   async function join() {
     if (!url.trim()) return;

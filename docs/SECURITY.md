@@ -53,6 +53,23 @@ formal cryptographic correctness. The committed exchange is a custom protocol, n
 implementation or certification of ZRTP. Its commitment ordering follows the rationale in
 [RFC 6189 section 4.4.1.1](https://www.rfc-editor.org/rfc/rfc6189.html#section-4.4.1.1).
 
+## Temporary browser rooms
+
+Temporary browser rooms use a separate RAM-only guest authority. A fragment invitation
+secret and a per-opening claim key atomically select one guest; role capabilities never
+appear in URL paths or query strings. Browser code clears the fragment after reading it.
+Room shutdown drops guest authority; the host guard closes unknown or expired guest TURN
+allocations even if their REST password remains valid. Permanent installation grants and
+their revocation journal are not used for guests. The pilot keeps the existing global
+20GiB traffic budget and adds bounded guest admissions/allocations.
+
+Web sessions pin their deadline to monotonic clocks, cap the conversation at one hour
+and do not restore history after reload. Leaving notifications are best effort if an OS
+kills a browser; peer disconnect detection and the fixed expiry remain necessary.
+Application state cleanup cannot erase screenshots, extensions, clipboard copies or
+all JavaScript/OS memory. Downloaded WASM does not protect against a malicious page
+publisher: that publisher is part of the browser client's trust boundary.
+
 ## Personal activation
 
 Generic releases contain no shared TURN password or bootstrap profile. A personal installer

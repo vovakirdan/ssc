@@ -54,6 +54,14 @@ pub async fn new_peer(
         Some(servers) => servers,
         None => project_or_stun(crate::access::managed_servers().await)?,
     };
+    new_peer_with_servers(session, initiator, servers).await
+}
+
+pub(crate) async fn new_peer_with_servers(
+    session: &Arc<Session>,
+    initiator: bool,
+    servers: Vec<ServerConfig>,
+) -> Result<Arc<RTCPeerConnection>, AppError> {
     session.ensure_active()?;
     let config = rtc_config(Some(servers));
     let pc = Arc::new(

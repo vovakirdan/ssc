@@ -1,0 +1,100 @@
+name: Web and shared protocol checks
+
+on:
+  push:
+    branches: [main, dev, feature/connection-helper]
+  pull_request:
+    branches: [main, dev]
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      upload_archive:
+        description: Upload the checked public web archive for a generic release
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  web:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Set up Rust and WASM target
+        id: rust_toolchain
+        run: |
+          rustup update stable --no-self-update
+          rustup default stable
+          rustup component add rustfmt clippy
+          rustup target add wasm32-unknown-unknown
+          echo "identity=$(rustc -vV | sha256sum | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+      - name: Cache public protocol builds and pinned WASM CLI
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cache/ssc-wasm-bindgen
+            crates/ssc-protocol/target
+          key: web-protocol-v1-${{ runner.os }}-${{ steps.rust_toolchain.outputs.identity }}-${{ hashFiles('crates/ssc-protocol/Cargo.lock') }}-bindgen-0.2.130
+          restore-keys: |
+            web-protocol-v1-${{ runner.os }}-${{ steps.rust_toolchain.outputs.identity }}-
+      - name: Install exact WASM CLI
+        run: |
+          wasm_cli="$HOME/.cache/ssc-wasm-bindgen/bin/wasm-bindgen"
+          if ! test -x "$wasm_cli" || [[ "$("$wasm_cli" --version)" != 'wasm-bindgen 0.2.130' ]]; then
+            cargo install wasm-bindgen-cli --version 0.2.130 --locked --root "$HOME/.cache/ssc-wasm-bindgen"
+          fi
+          echo "WASM_BINDGEN=$wasm_cli" >> "$GITHUB_ENV"
+      - name: Shared Rust regressions and actual WASM vectors
+        run: |
+          cargo fmt --manifest-path crates/ssc-protocol/Cargo.toml -- --check
+          cargo test --manifest-path crates/ssc-protocol/Cargo.toml --locked
+          cargo clippy --manifest-path crates/ssc-protocol/Cargo.toml --locked --all-targets -- -D warnings
+          cargo clippy --manifest-path crates/ssc-protocol/Cargo.toml --locked --target wasm32-unknown-unknown --lib -- -D warnings
+          bash crates/ssc-protocol/build-wasm.sh
+          node crates/ssc-protocol/tests/wasm.mjs
+      - name: Build public browser application
+        run: |
+          npm ci
+          npm audit
+          node --test scripts/packaging/web-package.test.mjs
+          npm run web:build
+      - name: Check the compiled WASM in Chromium
+        env:
+          SSC_WEB_TEST_URL: http://127.0.0.1:1430
+        run: |
+          set -euo pipefail
+          npx --no-install playwright install --with-deps chromium
+          protocol_url=$(node --input-type=module -e 'import {protocolUrl} from "./scripts/packaging/build-web.mjs";process.stdout.write(protocolUrl("web/dist"));')
+          export SSC_PROTOCOL_TEST_URL="$protocol_url"
+          ./node_modules/.bin/vite preview --config web/vite.config.ts --host 127.0.0.1 --port 1430 --strictPort > "$RUNNER_TEMP/ssc-web-preview.log" 2>&1 &
+          web_preview_pid=$!
+          trap 'kill "$web_preview_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --output /dev/null "$SSC_WEB_TEST_URL"; then break; fi
+            if ! kill -0 "$web_preview_pid" 2>/dev/null; then exit 1; fi
+            sleep 1
+          done
+          curl --fail --silent --output /dev/null "$SSC_WEB_TEST_URL"
+          npx --no-install playwright test web/tests/protocol.spec.ts --config web/playwright.config.ts --project=chromium --reporter=line
+      - name: Package only checked public static files
+        run: node scripts/packaging/build-web.mjs web/dist generic
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4
+        if: inputs.upload_archive
+        with:
+          name: generic-web
+          path: |
+            generic/ssc-web.tar.gz
+            generic/ssc-web.tar.gz.sha256
+          retention-days: 7
+          if-no-files-found: error

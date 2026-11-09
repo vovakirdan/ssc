@@ -116,6 +116,29 @@ ZeroID is also available on mobile devices with the same level of security and e
 
 ## Connection and activation
 
+### Temporary browser chats
+
+The browser application is built separately from `web/` and shares the exact Rust v3
+protocol with the desktop client through `crates/ssc-protocol`. It supports two people,
+text messages and mandatory comparison of the complete verification code. Guests need
+neither an installation nor a permanent TURN activation code.
+
+Create a temporary invitation in the browser, or choose **Временный чат без установки**
+in the updated desktop client. The invitation can be claimed for five minutes. A room
+ends after one hour or when a participant leaves; refreshing the browser does not restore
+its history. Browser room capabilities, keys and messages are not written to Web Storage.
+This does not guarantee forensic erasure or deletion of a peer's copies.
+
+The page assumes trust in the server publishing its JavaScript/WASM, the browser and the
+device. A compromised publisher can replace the code before encryption. There are no
+third-party scripts, analytics or service worker in the first web version.
+
+Build with Node24, Rust's `wasm32-unknown-unknown` target and `wasm-bindgen-cli 0.2.130`:
+`npm run web:build`. The generated web archive contains only public static assets; no
+activation profiles, credentials, source maps or private deployment files are included.
+See [web build and browser checks](web/README.md) for the precise automated matrix.
+Playwright WebKit/mobile emulation is not acceptance on a physical Safari/iPhone device.
+
 The default **Automatic** connection mode uses STUN and direct connections until this
 installation is activated. No project TURN access is required to create or accept a chat
 invitation. In Settings, choose **Custom servers** to use your own TURN, including an open

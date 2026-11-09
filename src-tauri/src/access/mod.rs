@@ -382,6 +382,10 @@ fn project_turn_urls(host: &str) -> Result<[String; 3], AppError> {
     ])
 }
 
+pub(crate) fn room_servers(value: serde_json::Value) -> Result<Vec<ServerConfig>, AppError> {
+    validate_credentials(serde_json::from_value(value).map_err(|_| malformed())?)
+}
+
 fn validate_credentials(response: CredentialResponse) -> Result<Vec<ServerConfig>, AppError> {
     let host = match std::env::var("SSC_TURN_HOST") {
         Ok(host) => host,

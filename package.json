@@ -1,7 +1,7 @@
 {
   "name": "ssc",
   "private": true,
-  "version": "0.2.6",
+  "version": "0.3.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,7 +9,10 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "lint": "eslint .",
-    "test": "vitest run"
+    "test": "vitest run",
+    "web:dev": "vite --config web/vite.config.ts",
+    "web:build": "node scripts/build-web.mjs",
+    "web:test": "playwright test --config web/playwright.config.ts --reporter=line"
   },
   "dependencies": {
     "@radix-ui/react-accordion": "^1.2.0",
@@ -67,6 +70,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.9.0",
+    "@playwright/test": "1.65.0",
     "@tauri-apps/cli": "^2.6.2",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.3",

@@ -352,6 +352,7 @@ fn cleanup(generation: u64, service: Service, receipt: Receipt) {
     });
 }
 pub fn connected(s: &Session) {
+    crate::rooms::connected(s);
     let cleanup_data = {
         let mut slot = lock(&s.link);
         if let Some(op) = slot.as_mut() {
@@ -379,6 +380,7 @@ pub fn connected(s: &Session) {
     }
 }
 pub fn retire(s: &Session) {
+    crate::rooms::retire(s);
     if let Some(mut op) = lock(&s.link).take() {
         op.snapshot.phase = LinkPhase::Cancelled;
         op.snapshot.url = None;
@@ -460,6 +462,9 @@ pub async fn create_link_invitation(
 }
 #[tauri::command]
 pub async fn join_link_invitation(app: AppHandle, url: String) -> Result<LinkSnapshot, AppError> {
+    if crate::rooms::is_link(&url) {
+        return crate::rooms::join(app, url).await;
+    }
     let service = Service::from_env()?;
     let token = Zeroizing::new(service.parse_link(&url)?);
     let s = state::begin(crate::utils::random_id(), app).await;
@@ -478,7 +483,9 @@ pub async fn join_link_invitation(app: AppHandle, url: String) -> Result<LinkSna
 }
 #[tauri::command]
 pub fn get_link_state() -> Option<LinkSnapshot> {
-    state::current().ok().and_then(|s| snapshot(&s))
+    state::current()
+        .ok()
+        .and_then(|s| crate::rooms::snapshot(&s).or_else(|| snapshot(&s)))
 }
 #[tauri::command]
 pub async fn retry_link_invitation(generation: u64) -> Result<LinkSnapshot, AppError> {

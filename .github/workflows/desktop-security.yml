@@ -44,6 +44,9 @@ jobs:
           npm run build
       - name: Rust regression checks
         run: |
+          cargo fmt --manifest-path crates/ssc-protocol/Cargo.toml -- --check
+          cargo test --manifest-path crates/ssc-protocol/Cargo.toml --locked
+          cargo clippy --manifest-path crates/ssc-protocol/Cargo.toml --locked --all-targets -- -D warnings
           cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
           cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings
           cargo test --manifest-path src-tauri/Cargo.toml --locked --lib
@@ -53,6 +56,7 @@ jobs:
       - name: Rust dependency audit
         run: |
           cargo install cargo-audit --version 0.22.2 --locked
+          cargo audit --file crates/ssc-protocol/Cargo.lock
           cargo audit --file src-tauri/Cargo.lock
           cargo audit --file src-tauri/vendor/webrtc-dtls/Cargo.lock
           cargo audit --file src-tauri/vendor/webrtc-ice/Cargo.lock
