@@ -94,6 +94,20 @@ try {
   stage = 'relay_route';
   for (const peer of sessions) await until(async () => (await ipc(peer, 'get_session_state')).route === 'relay', 'selected relay route');
   console.log(`PASS ${transport} live HTTPS invitation, automatic answer, mandatory two-sided SAS and relay route`);
+  stage = 'capture_status';
+  const platform = { win32: 'windows', linux: 'linux', darwin: 'macos' }[process.platform] || 'other';
+  let captureRequested = 0;
+  for (const peer of sessions) {
+    const capture = await ipc(peer, 'get_capture_protection');
+    if (capture?.platform !== platform || typeof capture.enabled !== 'boolean' || typeof capture.limitation !== 'string' || !capture.limitation.trim()) throw new Error('Invalid capture protection status');
+    if (platform !== 'windows' && capture.enabled) throw new Error('Unsupported capture protection claim');
+    if (capture.enabled) captureRequested++;
+    await clickLabel(peer, 'Как защищён чат');
+    const description = capture.enabled ? 'Системная защита окна от части способов захвата включена.' : 'Системная защита от захвата экрана здесь не подтверждена.';
+    await until(async () => await visible(peer, description) && await visible(peer, capture.limitation), 'honest capture status in help');
+    await clickLabel(peer, 'Закрыть окно');
+  }
+  console.log(`PASS ${transport} honest capture status and help: API requested=${captureRequested}/2; physical capture remains untested`);
   stage = 'bidirectional_messages';
   await send(sessions[0], sessions[1], `managed ${transport} greeting 🦀`);
   await send(sessions[1], sessions[0], `managed ${transport} reply 🦀`);
@@ -141,8 +155,20 @@ try {
   }
   console.log(`PASS ${transport} diagnostic redaction${revocationObserved ? '' : ' and helper completion'}`);
   stage = 'cleanup';
-  if (!revocationObserved) for (const peer of sessions) await clickLabel(peer, 'Выйти из чата');
+  if (!revocationObserved) {
+    await clickLabel(sessions[0], 'Выйти из чата');
+    await until(() => visible(sessions[0], 'Завершить чат?'), 'exit confirmation');
+    await click(sessions[0], 'Остаться');
+    for (const peer of sessions) if ((await ipc(peer, 'get_session_state')).phase !== 'connected' || !await hasLabel(peer, 'Сообщение')) throw new Error('Cancelled exit disconnected the chat');
+    await clickLabel(sessions[0], 'Выйти из чата');
+    await until(() => visible(sessions[0], 'Завершить чат?'), 'exit confirmation again');
+    await click(sessions[0], 'Выйти и очистить');
+  }
   for (const peer of sessions) await until(async () => ['idle', 'closed'].includes((await ipc(peer, 'get_session_state')).phase), 'session retirement');
+  if (!revocationObserved) {
+    if ((await ipc(sessions[0], 'get_session_state')).close_reason !== 'local_left' || (await ipc(sessions[1], 'get_session_state')).close_reason !== 'peer_left') throw new Error('Authenticated exit reason mismatch');
+    for (const peer of sessions) await until(() => execute(peer, 'return document.querySelectorAll(".ssc-message").length === 0'), 'cleared conversation history');
+  }
   console.log(`PASS ${transport} session cleanup`);
 } catch (error) {
   let code = 'webdriver_or_timeout';
