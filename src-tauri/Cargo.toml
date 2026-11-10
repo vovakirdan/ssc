@@ -1,6 +1,6 @@
 [package]
 name = "ssc"
-version = "0.4.1"
+version = "0.4.2"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -50,3 +50,4 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Securit
 turn = { path = "vendor/turn" }
 webrtc-dtls = { path = "vendor/webrtc-dtls" }
 webrtc-ice = { path = "vendor/webrtc-ice" }
+webrtc-sctp = { path = "vendor/webrtc-sctp" }

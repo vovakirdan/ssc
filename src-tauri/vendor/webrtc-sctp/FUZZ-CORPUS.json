@@ -1,0 +1,48 @@
+{
+  "upstream_commit": "fa3b850527f5db19f8e7d844e8356e1d3676f616",
+  "source": "https://github.com/webrtc-rs/webrtc/tree/fa3b850527f5db19f8e7d844e8356e1d3676f616/sctp/fuzz/artifacts",
+  "files": [
+    {
+      "path": "fuzz/artifacts/packet/crash-16cad30042bc4791bd62c630a780add5d1220779",
+      "size": 54,
+      "git_blob_sha1": "2f6df735be0cb447c0338e6f2ad225df47a6408f",
+      "sha256": "db36cf2b8f389a09cad71dbad8c79312f4f95e6e8dddc4a7a89dab9e80812052"
+    },
+    {
+      "path": "fuzz/artifacts/packet/crash-8b9b318a6b66ea23232a4e2aec91deeeca470af8",
+      "size": 341,
+      "git_blob_sha1": "aac36a2339a261a0e843f3aba269ad65b78b171f",
+      "sha256": "5273a747a21162db77502c2d4c71b8eb9ab8962f7e363e872683155ef9b256f5"
+    },
+    {
+      "path": "fuzz/artifacts/packet/crash-8d90dfc8fc34fa06f161f69617ee8f48dec434cd",
+      "size": 85,
+      "git_blob_sha1": "92d545a3d893f469347faec3084323e4b63b1529",
+      "sha256": "dee8eebc7224b96be056877d6ee75fd3472a00a6386e9e8e39f7ec655a77e63a"
+    },
+    {
+      "path": "fuzz/artifacts/packet/crash-b836a20af7f8af85423dbe80565465b16bb7a16f",
+      "size": 85,
+      "git_blob_sha1": "bd51fac255355b98bdc73fbc39349ddf78d95c65",
+      "sha256": "157ebc0ddd37a7f354e6396138c6d28d18ca9c9391b4759aff9149c9266cf962"
+    },
+    {
+      "path": "fuzz/artifacts/packet/crash-f940d9879efc88872145955bae11ca6ad6a4c044",
+      "size": 129,
+      "git_blob_sha1": "745cf533b4fbdd78e15033fb246d6329794a99df",
+      "sha256": "638fb44fcb3c36c69fb279cda004ee6e4e332e67c5876aa9f0ea6d951f349f73"
+    },
+    {
+      "path": "fuzz/artifacts/param/crash-216833e417069f431d0617fb4e9f8abe6c9a6c1d",
+      "size": 16,
+      "git_blob_sha1": "a0d02fce86b3902a68a124e56a1e6299b9e946f5",
+      "sha256": "88fbb1fb8de06d63706629d956f95263612b9dfd4526b0edaae8eb355a8672a0"
+    },
+    {
+      "path": "fuzz/artifacts/param/crash-fb1b644bc0d365ce2dc3c3ff77cd3c4cd8da528d",
+      "size": 16,
+      "git_blob_sha1": "a597b341f1e0597f3c9d1752c64ab8437071656d",
+      "sha256": "1d5abc1d2bfe05608b5b41a7218d7fd8ee2e3f2d974f10ff44082ea8abde7ab1"
+    }
+  ]
+}

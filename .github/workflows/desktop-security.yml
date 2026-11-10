@@ -58,6 +58,8 @@ jobs:
           CARGO_TARGET_DIR="$RUNNER_TEMP/turn-target" cargo test --manifest-path src-tauri/vendor/turn/Cargo.toml --locked --lib test_client_with_stun_send_binding_request_to_timeout
       - name: Vendored ICE transport tests
         run: CARGO_TARGET_DIR="$RUNNER_TEMP/ice-target" cargo test --manifest-path src-tauri/vendor/webrtc-ice/Cargo.toml --locked --lib
+      - name: Vendored SCTP packet sizing and upstream library regressions
+        run: CARGO_TARGET_DIR="$RUNNER_TEMP/sctp-target" cargo test --manifest-path src-tauri/vendor/webrtc-sctp/Cargo.toml --locked --lib
       - name: Rust dependency audit
         run: |
           cargo install cargo-audit --version 0.22.2 --locked
@@ -66,3 +68,4 @@ jobs:
           cargo audit --file src-tauri/vendor/webrtc-dtls/Cargo.lock
           cargo audit --file src-tauri/vendor/webrtc-ice/Cargo.lock
           cargo audit --file src-tauri/vendor/turn/Cargo.lock
+          cargo audit --file src-tauri/vendor/webrtc-sctp/Cargo.lock
