@@ -43,14 +43,16 @@ test('preview does not claim; two browsers compare SAS, chat and erase on exit',
     const beforeRollback = seconds(await countdown.textContent());
     await creator.clock.setSystemTime(new Date(Date.now() - 3 * 3600_000));
     await creator.clock.runFor(1100);
-    await expect(creator.getByRole('heading', { name: 'Защищённый чат' })).toBeVisible();
+    await expect(creator.locator('h1[data-ssc-peer-name]')).toBeVisible();
+    await expect(creator.locator('h1[data-ssc-peer-name]')).toHaveText(/^\S+ \S+$/);
     expect(seconds(await countdown.textContent())).toBeLessThanOrEqual(beforeRollback);
     const polled = creator.waitForResponse(response => response.request().method() === 'GET' && new URL(response.url()).pathname.startsWith('/v1/rooms/'));
     await creator.clock.setSystemTime(new Date(Date.now() + 3 * 3600_000));
     await creator.clock.runFor(2100);
     await (await polled).finished();
     await creator.clock.runFor(100);
-    await expect(creator.getByRole('heading', { name: 'Защищённый чат' })).toBeVisible();
+    await expect(creator.locator('h1[data-ssc-peer-name]')).toBeVisible();
+    await expect(creator.locator('h1[data-ssc-peer-name]')).toHaveText(/^\S+ \S+$/);
     expect(seconds(await countdown.textContent())).toBeLessThanOrEqual(beforeRollback);
     expect(seconds(await countdown.textContent())).toBeGreaterThan(beforeRollback - 10);
     await leaveChat(creator);

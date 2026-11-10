@@ -1,5 +1,6 @@
 import { AUTO_ACCEPT_BYTES, CHUNK_BYTES, MAX_CACHE_BYTES, MAX_FILE_BYTES, REACTIONS,
   type Attachment, type ChatEvent, type ChatItem, type ChatTransport, type ConversationSnapshot, type HashSink, type MediaKind, type ReactionEmoji } from './types';
+import { createAnonymousName } from './anonymous-name';
 export const randomId = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('');
 const encode = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes));
 function decode(value: string) { const data = atob(value); return Uint8Array.from(data, c => c.charCodeAt(0)); }
@@ -7,6 +8,7 @@ const kindOf = (file: File): MediaKind => file.type.startsWith('image/') && !fil
 interface Transfer { file?: Blob; parts: Blob[]; offset: number; acknowledged: number; hasher?: HashSink; cancelled: boolean; wake: Set<() => void>; }
 /** Shared application policy. The transport owns cryptography; this object owns only volatile UI/file state. */
 export class ChatModel {
+  readonly peerName = createAnonymousName();
   private state: ConversationSnapshot = { messages: [], closed: false, notice: null, cacheBytes: 0, peerAudioFormats: [] };
   private listeners = new Set<(state: ConversationSnapshot) => void>();
   private transfers = new Map<string, Transfer>();

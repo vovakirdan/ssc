@@ -113,7 +113,7 @@ export function ChatPanel({ model, state, onExit, remainingSeconds, capture, rea
   const conceal = () => { privacyEpoch.current++; setAuthorizingVoice(false); voice.discard(); setFiles([]); setMasked(true); };
   const forget = (id: string) => { model.forget(id); setDust(value => value + 1); };
   const message = (item: ChatItem) => <li key={item.id} className={item.own ? 'ssc-message ssc-own' : 'ssc-message'}>
-    <div className="ssc-message-heading"><span>{item.own ? 'Вы' : 'Собеседник'}</span><button className="ssc-icon-button" disabled={!!item.attachment && ['offered', 'sending', 'receiving', 'waiting'].includes(item.attachment.status)} aria-label="Удалить сообщение из памяти" title="Удалить только на этом устройстве; активную передачу сначала отмените" onClick={() => forget(item.id)}><Trash2 size={14} /></button></div>
+    <div className="ssc-message-heading"><span title={item.own ? undefined : 'Случайное имя для этого чата'} aria-description={item.own ? undefined : 'Случайное имя для этого чата'}>{item.own ? 'Вы' : model.peerName}</span><button className="ssc-icon-button" disabled={!!item.attachment && ['offered', 'sending', 'receiving', 'waiting'].includes(item.attachment.status)} aria-label="Удалить сообщение из памяти" title="Удалить только на этом устройстве; активную передачу сначала отмените" onClick={() => forget(item.id)}><Trash2 size={14} /></button></div>
     {item.text !== undefined && <p className="ssc-message-text">{item.text}</p>}
     {item.attachment && <AttachmentView item={item} ready={available} accept={() => { void perform(() => model.accept(item.attachment!.id)); }} reject={() => { void perform(() => model.reject(item.attachment!.id)); }} cancel={() => { void perform(() => model.cancel(item.attachment!.id)); }} fail={setError} />}
     <div className="ssc-message-footer"><span>{states[item.status]}</span><div className="ssc-reactions" role="group" aria-label="Реакции на сообщение">{REACTIONS.map(emoji => {
@@ -125,7 +125,7 @@ export function ChatPanel({ model, state, onExit, remainingSeconds, capture, rea
     <header className="ssc-chat-header">
       <button className="ssc-icon-button ssc-header-back" aria-label="Выйти из чата" onClick={requestExit}><ArrowLeft size={20} /></button>
       <span className="ssc-brand-mark" aria-hidden="true">◈</span>
-      <div className="ssc-chat-title"><h1>{closed ? 'Чат завершён' : ready ? 'Защищённый чат' : 'Секретный чат'}</h1><span><ShieldCheck size={12} />{closed ? 'История не сохраняется' : ready ? 'Сверка подтверждена' : 'Ожидаем соединения…'}</span></div>
+      <div className="ssc-chat-title"><h1 data-ssc-peer-name={closed ? undefined : true} title={closed ? undefined : 'Случайное имя для этого чата'} aria-description={closed ? undefined : 'Случайное имя для этого чата'}>{closed ? 'Чат завершён' : model.peerName}</h1><span><ShieldCheck size={12} />{closed ? 'История не сохраняется' : ready ? 'Сверка подтверждена' : 'Ожидаем соединения…'}</span></div>
       {!closed && remainingSeconds !== null && <RemainingTime seconds={remainingSeconds} />}
       <div className="ssc-header-actions"><ThemeControl /><button className="ssc-icon-button" aria-label="Как защищён чат" onClick={() => setHelp(true)}><Info size={19} /></button>{!closed && <button className="ssc-icon-button" aria-label="Скрыть чат" onClick={conceal}><EyeOff size={19} /></button>}{capture?.platform === 'browser' && !closed && <button className="ssc-header-exit" aria-label="Выйти и завершить чат" onClick={requestExit}>Выйти</button>}</div>
     </header>

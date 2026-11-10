@@ -9,7 +9,7 @@ import type { ChatItem, ConversationSnapshot } from '../types';
 const initial = (): ConversationSnapshot => ({ messages: [], closed: false, notice: null, cacheBytes: 0, peerAudioFormats: ['audio/wav'] });
 const item = (text = 'private fixture phrase'): ChatItem => ({ id: 'a'.repeat(32), text, own: true, status: 'sent', timestamp: 0, reactions: { own: null, peer: null } });
 function fake(state = initial()) {
-  return { snapshot: () => state, sendText: vi.fn().mockResolvedValue(undefined), offerFiles: vi.fn().mockResolvedValue(undefined), accept: vi.fn(), reject: vi.fn(), cancel: vi.fn(), react: vi.fn(), forget: vi.fn() } as unknown as ChatModel;
+  return { peerName: 'Тихий Енот', snapshot: () => state, sendText: vi.fn().mockResolvedValue(undefined), offerFiles: vi.fn().mockResolvedValue(undefined), accept: vi.fn(), reject: vi.fn(), cancel: vi.fn(), react: vi.fn(), forget: vi.fn() } as unknown as ChatModel;
 }
 beforeEach(() => {
   localStorage.clear();
@@ -17,6 +17,21 @@ beforeEach(() => {
   vi.spyOn(HTMLMediaElement.prototype, 'canPlayType').mockReturnValue('maybe');
   vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => undefined);
   vi.spyOn(HTMLMediaElement.prototype, 'load').mockImplementation(() => undefined);
+});
+it('keeps the local peer alias through theme and message renders without presenting it as verification', () => {
+  const incoming = { ...item('incoming fixture'), id: 'c'.repeat(32), own: false }, state = { ...initial(), messages: [item(), incoming] }, model = fake(state);
+  const rendered = render(<ThemeProvider><ChatPanel model={model} state={state} ready remainingSeconds={3599} onExit={vi.fn()} /></ThemeProvider>);
+  const heading = screen.getByRole('heading', { name: model.peerName });
+  expect(heading).toHaveAttribute('data-ssc-peer-name'); expect(heading).toHaveAccessibleDescription('Случайное имя для этого чата');
+  expect(screen.getAllByText(model.peerName)).toHaveLength(2); expect(screen.getByText('Вы')).toBeInTheDocument();
+  expect(screen.getByText('Сверка подтверждена')).toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText('Тема'), { target: { value: 'light' } });
+  rendered.rerender(<ThemeProvider><ChatPanel model={model} state={{ ...state, messages: [...state.messages, { ...incoming, id: 'b'.repeat(32) }] }} ready remainingSeconds={3598} onExit={vi.fn()} /></ThemeProvider>);
+  expect(screen.getByRole('heading', { name: model.peerName })).toBe(heading); expect(screen.getAllByText(model.peerName)).toHaveLength(3);
+  expect(localStorage.length).toBe(1); expect(localStorage.getItem('ssc-theme')).toBe('light');
+  rendered.rerender(<ThemeProvider><ChatPanel model={model} state={{ ...state, messages: [], closed: true }} remainingSeconds={null} onExit={vi.fn()} /></ThemeProvider>);
+  expect(screen.getByRole('heading', { name: 'Чат завершён' })).not.toHaveAttribute('data-ssc-peer-name');
+  expect(screen.queryByText(model.peerName)).not.toBeInTheDocument();
 });
 it('clears plaintext immediately on close and dust contains no message data', () => {
   const state = { ...initial(), messages: [item()] }, model = fake(state);
