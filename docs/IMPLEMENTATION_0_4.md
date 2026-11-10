@@ -16,11 +16,18 @@
 
 | Часть | Владелец | Состояние |
 |---|---|---|
-| Общий Rust/WASM v4, типы/валидация/hasher/векторы | managed_client | В работе |
-| Native transport/IPC/generation/bye/capture | personal_installers | В работе |
-| Общие UI/theme/help/voice | activation_ui | В работе |
-| Общая media model, browser/native adapters, integration | root | В работе |
-| Roadmap/10x docs, CSP, packaging, release/CI/CD | root | В работе |
+| Общий Rust/WASM v4, типы/валидация/hasher/векторы | managed_client | Готово: 39 tests, native/WASM lint, actual WASM vectors и 100MiB hash |
+| Native transport/IPC/generation/bye/capture | personal_installers | Готово: 90 tests, lint, release build |
+| Общие UI/theme/help/voice | activation_ui | Готово: shared UI, безопасный выход в шапке, таймер, темы, 97 npm tests |
+| Общая media model, browser/native adapters, integration | root | Готово локально: Chromium/Firefox/WebKit, native mixed roles, восемь передач 1/100MiB |
+| Roadmap/10x docs, CSP, packaging, release/CI/CD | root | Документы готовы; публикация и внешняя приёмка выполняются |
+
+## Проверенные границы
+
+- Локальный настоящий TURN: native ↔ Chromium, обе роли и оба направления, четыре передачи по 1MiB и четыре по 100MiB. SHA256 и исходное Unicode-имя совпали; сохранение проверено в отдельном тестовом Downloads. Текст и реакции передавались во время большой передачи; authenticated Bye проверен в обе стороны.
+- После переноса выхода и таймера повторены четыре передачи по 1MiB, подтверждение выхода и Chromium media suite. Для нового commit ещё выполняется внешняя матрица.
+- Запись Chromium проверена с синтетическим микрофоном. Физические микрофоны, Windows capture protection и телефонная запись этим не подтверждены.
+- Проверка 100MiB при ограниченной скорости требует отдельного стабильного стенда без Vite HMR; её не считаем пройденной. Положительная функциональная проверка выполнена на локальном TURN без ограничения скорости.
 
 ## Очерёдность проверки
 
