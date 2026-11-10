@@ -1,4 +1,5 @@
 import { ChatModel } from '../../src/chat/model';
+import { waitForSendBuffer } from '../../src/chat/channel-buffer';
 import type { ChatEvent, HashSink } from '../../src/chat/types';
 import { playableVoiceFormats } from '../../src/chat/voice/recorder';
 import { isCapability, RoomError, RoomsApi, type RoomAccess, type RoomMetadata } from './api';
@@ -237,16 +238,7 @@ export class BrowserChat {
     for (const frame of frames) {
       this.ensure(); const channel = this.channel;
       if (!channel || channel.readyState !== 'open') throw new Error('Channel closed');
-      if (channel.bufferedAmount > 256 * 1024) {
-        await new Promise<void>((resolve, reject) => {
-          const done = () => { cleanup(); resolve(); };
-          const failed = () => { cleanup(); reject(new Error('Channel unavailable')); };
-          const timer = setTimeout(failed, 5000);
-          const cleanup = () => { clearTimeout(timer); channel.removeEventListener('bufferedamountlow', done); channel.removeEventListener('close', failed); };
-          channel.addEventListener('bufferedamountlow', done, { once: true }); channel.addEventListener('close', failed, { once: true });
-          if (channel.bufferedAmount <= channel.bufferedAmountLowThreshold) done();
-        });
-      }
+      await waitForSendBuffer(channel, this.controller.signal);
       this.ensure(); channel.send(frame as Uint8Array<ArrayBuffer>);
     }
   }

@@ -290,6 +290,26 @@ async fn backpressure_waits_for_low_water_and_is_cancelled_by_stop() {
 }
 
 #[tokio::test]
+async fn backpressure_drain_past_five_seconds_keeps_session_usable() {
+    let s = Session::new(715, "slow-drain".into(), None);
+    let started = tokio::time::Instant::now();
+    tokio::time::timeout(
+        Duration::from_secs(12),
+        wait_send_buffer(&s, 1024, || async {
+            if started.elapsed() >= Duration::from_secs(6) {
+                BUFFER_LOW
+            } else {
+                BUFFER_HIGH
+            }
+        }),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(s.active());
+}
+
+#[tokio::test]
 async fn local_close_clears_immediately_even_while_send_mutex_is_held() {
     let (s, _) = keyed(711);
     ready(&s);

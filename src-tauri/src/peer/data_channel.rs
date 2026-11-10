@@ -13,6 +13,9 @@ pub(super) const BUFFER_HIGH: usize = 256 * 1024;
 pub(super) const BUFFER_LOW: usize = 64 * 1024;
 pub(super) const MAX_INBOX_EVENTS: usize = 512;
 pub(super) const MAX_INBOX_BYTES: usize = 8 * 1024 * 1024;
+// A rate-limited TURN route may drain SCTP for longer than five seconds.
+// Session stop still cancels either wait immediately.
+const SEND_TIMEOUT: Duration = Duration::from_secs(30);
 
 async fn sending_guard(s: &Session) -> Result<tokio::sync::MutexGuard<'_, ()>, AppError> {
     tokio::select! { biased;
@@ -371,7 +374,7 @@ where
     };
     tokio::select! { biased;
         _ = s.stopped() => s.ensure_active(),
-        result = tokio::time::timeout(Duration::from_secs(5), waiting) => {
+        result = tokio::time::timeout(SEND_TIMEOUT, waiting) => {
             result.map_err(|_|AppError::new("backpressure_timeout", "data_channel", "Канал не успевает передавать данные", true))?;
             s.ensure_active()
         }
@@ -414,7 +417,7 @@ pub async fn send_encrypted(s: &Arc<Session>, kind: u8, payload: &[u8]) -> Resul
     let frame = Bytes::from(frame);
     tokio::select! { biased;
         _ = s.stopped() => return s.ensure_active(),
-        result = tokio::time::timeout(Duration::from_secs(5), dc.send(&frame)) => {
+        result = tokio::time::timeout(SEND_TIMEOUT, dc.send(&frame)) => {
             result.map_err(|_| AppError::new("send_failed", "data_channel", "Не удалось передать данные каналу", true))?
                 .map_err(|_| AppError::new("send_failed", "message", "Не удалось передать сообщение каналу", true))?;
         },

@@ -5,7 +5,7 @@
 ## Приёмка
 
 - Native macOS microphone packaging/usage descriptions and real-device acceptance are not covered by current Linux/Windows distribution.
-- Длительная передача100MiB с shaping/600s credential boundary без dev HMR: быстрый local TURN тест не является production throughput SLA.
+- Длительная передача100MiB с shaping/600s credential boundary без dev HMR: быстрый local TURN тест не является production throughput SLA. Поправка0.4.1 увеличивает слишком короткое5s ожидание буфера; это не доказательство приёмки100MiB на ограниченном внешнем маршруте.
 - Физический Android/Chrome: вложения, запись голоса, фон/возврат и разные сети.
 - Windows GUI: новый чат, произвольные файлы, сохранение и реальные способы захвата окна.
 - Разные внешние NAT, Linux/Windows пары, длительные сессии и смена сети.
