@@ -1,7 +1,11 @@
-//! Shared desktop/browser protocol v3. Entropy is supplied by the caller's CSPRNG.
+//! Shared desktop/browser protocol v4. Entropy is supplied by the caller's CSPRNG.
 #![forbid(unsafe_code)]
 
 pub mod crypto;
+pub mod events;
+mod file_hasher;
+pub use events::{decode_event, encode_event, AttachmentKind, ByeReason, ChatEvent, KIND_EVENT};
+pub use file_hasher::FileHasher;
 pub mod handshake;
 pub mod invitation;
 pub mod message;

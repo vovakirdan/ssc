@@ -1,3 +1,6 @@
+import { ChatModel } from '../../src/chat/model';
+import type { ChatEvent, HashSink } from '../../src/chat/types';
+import { playableVoiceFormats } from '../../src/chat/voice/recorder';
 import { isCapability, RoomError, RoomsApi, type RoomAccess, type RoomMetadata } from './api';
 import { capability, connectionId, entropy, loadProtocol, type ProtocolModule, type ProtocolSession } from './protocol';
 
@@ -7,6 +10,7 @@ export interface ChatView { phase: Phase; invite: string; sas: string | null; lo
 const empty = (phase: Phase): ChatView => ({ phase, invite: '', sas: null, localConfirmed: false, peerConfirmed: false, remainingSeconds: null, messages: [], error: null });
 const pause = (milliseconds: number) => new Promise(resolve => setTimeout(resolve, milliseconds));
 export function errorText(error: unknown): string {
+  if (error instanceof Error && error.message === 'unsupported_version') return 'Версии клиентов несовместимы. Обновите desktop и перезагрузите web-страницу.';
   if (error instanceof RoomError) switch (error.code) {
     case 'room_unavailable': return 'Чат закрыт или срок ссылки истёк. Создайте новый чат.';
     case 'conflict': return 'Эта ссылка уже использована другим собеседником. Попросите новую ссылку.';
@@ -49,8 +53,24 @@ export class BrowserChat {
   private handshakeStarted = 0;
   private recoveryStarted = 0;
   private clock: ReturnType<typeof setInterval> | undefined;
-  private messageNumber = 0;
+  readonly conversation: ChatModel;
+  private capabilitiesSent = false;
+  private incomingBytes = 0;
+  private incomingFrames = 0;
   constructor() {
+    this.conversation = new ChatModel({
+      isReady: () => !this.closed && !!this.protocol?.local_ready() && this.protocol.peer_ready() && this.channel?.readyState === 'open',
+      send: event => this.sendEvent(event),
+      createHasher: async () => {
+        this.ensure(); const hasher = new this.module!.FileHasher(); let finished = false;
+        return {
+          update: async bytes => { this.ensure(); if (finished) throw new Error('Hasher closed'); hasher.update(bytes); },
+          finish: async () => { try { this.ensure(); if (finished) throw new Error('Hasher closed'); return hasher.finish(); } finally { if (!finished) { finished = true; hasher.free(); } } },
+          abort: () => { if (!finished) { finished = true; hasher.abort(); hasher.free(); } },
+        } satisfies HashSink;
+      },
+      onPeerExit: reason => this.close(reason === 'expired' ? 'Время чата истекло. История на этом устройстве очищена.' : reason === 'exit' ? 'Собеседник вышел. История чата на этом устройстве очищена.' : 'Соединение прервано. История на этом устройстве очищена.'),
+    });
     const match = /^\/r\/([A-Za-z0-9_-]{43})$/.exec(location.pathname);
     const secret = new URLSearchParams(location.hash.slice(1)).get('k');
     this.view = empty(match && isCapability(secret) ? 'preview' : 'home');
@@ -67,7 +87,7 @@ export class BrowserChat {
   }
   private ensure() {
     const deadline = this.sessionDeadline ?? this.joinDeadline;
-    if (!this.closed && deadline !== null && performance.now() >= deadline) this.close('Время чата истекло. Создайте новый чат.');
+    if (!this.closed && deadline !== null && performance.now() >= deadline) this.close('Время чата истекло. История на этом устройстве очищена.', false, 'expired');
     if (!this.closed && this.handshakeStarted && !this.protocol?.sas() && performance.now() - this.handshakeStarted >= 20_000) this.close('Обмен ключами не завершился. Создайте новый чат.');
     if (this.closed) throw new Error('Session closed');
   }
@@ -164,10 +184,10 @@ export class BrowserChat {
       } else if (pc.connectionState === 'failed' || pc.connectionState === 'closed') this.close('Соединение завершено. Создайте новый чат.');
     };
     pc.ondatachannel = event => this.attachChannel(event.channel);
-    if (initiator) this.attachChannel(pc.createDataChannel('ssc-v3', { ordered: true }));
+    if (initiator) this.attachChannel(pc.createDataChannel('ssc-v4', { ordered: true }));
   }
   private attachChannel(channel: RTCDataChannel) {
-    if (this.closed || this.channel || channel.label !== 'ssc-v3' || !channel.ordered || channel.maxRetransmits !== null || channel.maxPacketLifeTime !== null) {
+    if (this.closed || this.channel || channel.label !== 'ssc-v4' || !channel.ordered || channel.maxRetransmits !== null || channel.maxPacketLifeTime !== null) {
       channel.close(); this.close('Недопустимый канал соединения.'); return;
     }
     this.channel = channel; channel.binaryType = 'arraybuffer'; channel.bufferedAmountLowThreshold = 64 * 1024;
@@ -176,7 +196,11 @@ export class BrowserChat {
       void this.enqueue(async () => { await this.sendFrames(this.protocol!.start()); await this.updateCrypto(); });
     };
     channel.onmessage = event => {
+      const size = event.data instanceof ArrayBuffer ? event.data.byteLength : event.data instanceof Blob ? event.data.size : Infinity;
+      if (size > 64 * 1024 || this.incomingBytes + size > 8 * 1024 * 1024 || this.incomingFrames >= 512) { this.close('Входящая очередь переполнена. История очищена.'); return; }
+      this.incomingBytes += size; this.incomingFrames++;
       void this.enqueue(async () => {
+        try {
         const value: unknown = event.data;
         let frame: Uint8Array;
         if (value instanceof ArrayBuffer && value.byteLength <= 64 * 1024) frame = new Uint8Array(value);
@@ -184,9 +208,16 @@ export class BrowserChat {
         else throw new Error('Invalid binary frame');
         this.ensure();
         const step = this.protocol!.receive(frame);
+        // Authenticated Bye retires the core keys: handle it before any handshake checks
+        // and before slower file/hash callbacks can delay history clearing.
+        if (step.event?.type === 'bye') {
+          this.close(step.event.reason === 'expired' ? 'Время чата истекло. История на этом устройстве очищена.' : 'Собеседник вышел. История чата на этом устройстве очищена.');
+          return;
+        }
         await this.sendFrames(step.outgoing);
-        if (step.message !== null) this.addMessage(false, step.message);
+        if (step.event) void this.conversation.receive(step.event);
         await this.updateCrypto();
+        } finally { this.incomingBytes -= size; this.incomingFrames--; }
       });
     };
     channel.onclose = () => this.close('Собеседник отключился. Чат завершён.');
@@ -223,6 +254,7 @@ export class BrowserChat {
     this.ensure(); const protocol = this.protocol!; const sas = protocol.sas();
     if (!sas) return;
     clearTimeout(this.handshake); this.handshake = undefined;
+    this.handshakeStarted = 0;
     const localConfirmed = protocol.local_ready(), peerConfirmed = protocol.peer_ready();
     this.update({ sas, localConfirmed, peerConfirmed });
     if (this.pc?.connectionState !== 'connected') return;
@@ -231,6 +263,7 @@ export class BrowserChat {
         this.setMetadata(await this.api.connected(this.room!)); this.ensure(); this.connectedPublished = true;
       }
       this.update({ phase: 'chat' });
+      if (!this.capabilitiesSent) { this.capabilitiesSent = true; void this.conversation.connected(playableVoiceFormats()); }
     } else this.update({ phase: localConfirmed ? 'waiting_peer' : 'verification' });
   }
   async confirm(): Promise<void> {
@@ -240,19 +273,18 @@ export class BrowserChat {
       await this.sendFrames([this.protocol!.confirm()]); await this.updateCrypto();
     });
   }
-  async send(text: string): Promise<void> {
-    if (this.closed || this.view.phase !== 'chat' || !text.trim()) return;
+  async send(text: string): Promise<void> { await this.conversation.sendText(text); }
+  private async sendEvent(event: ChatEvent) {
+    if (this.closed || !this.protocol?.local_ready() || !this.protocol.peer_ready() || this.channel?.readyState !== 'open') throw new Error('Chat unavailable');
     await this.enqueue(async () => {
-      const frames = this.protocol!.send_text(text, entropy(16));
-      await this.sendFrames(frames); this.addMessage(true, text);
+      const protocol = this.protocol!;
+      const frames = event.type === 'text'
+        ? protocol.send_text(event.text, Uint8Array.from(event.id.match(/../g)!, byte => parseInt(byte, 16)))
+        : [protocol.send_event(JSON.stringify(event))];
+      await this.sendFrames(frames);
     });
   }
-  private addMessage(own: boolean, text: string) {
-    const messages = [...this.view.messages, { id: ++this.messageNumber, own, text }];
-    let bytes = messages.reduce((sum, message) => sum + new TextEncoder().encode(message.text).byteLength, 0);
-    while (messages.length > 128 || bytes > 8 * 1024 * 1024) bytes -= new TextEncoder().encode(messages.shift()!.text).byteLength;
-    this.update({ messages });
-  }
+  leave(keepalive = false) { this.close('Вы вышли. История чата на этом устройстве очищена.', keepalive, 'exit'); }
   private async localDescription(type: 'offer' | 'answer'): Promise<string> {
     const pc = this.pc!; const candidates: RTCIceCandidateInit[] = [];
     pc.onicecandidate = event => { if (event.candidate) candidates.push(event.candidate.toJSON()); };
@@ -289,17 +321,25 @@ export class BrowserChat {
       await pause(2000);
     }
   }
-  close(reason: string | null = null, keepalive = false): void {
+  close(reason: string | null = null, keepalive = false, notifyPeer: 'exit' | 'expired' | false = false): void {
     if (this.closed) return;
+    let graceful = false;
+    if (notifyPeer && this.protocol?.local_ready() && this.protocol.peer_ready() && this.channel?.readyState === 'open') {
+      try { this.channel.send(this.protocol.send_event(JSON.stringify({ type: 'bye', reason: notifyPeer })) as Uint8Array<ArrayBuffer>); graceful = true; } catch { /* Abrupt unload/network loss remains best effort. */ }
+    }
+    this.conversation.close(reason || 'Связь прервалась. История чата на этом устройстве очищена.');
     this.closed = true; this.controller.abort(); clearTimeout(this.recovery); clearTimeout(this.handshake); clearInterval(this.clock);
     const room = this.room; this.room = null; this.inviteSecret = ''; this.claimKey = ''; this.createKey = '';
-    if (this.channel) { this.channel.onclose = null; this.channel.onmessage = null; this.channel.onopen = null; this.channel.onerror = null; this.channel.close(); this.channel = null; }
-    if (this.pc) { this.pc.onconnectionstatechange = null; this.pc.ondatachannel = null; this.pc.close(); this.pc = null; }
+    const channel = this.channel, pc = this.pc;
+    if (channel) { channel.onclose = null; channel.onmessage = null; channel.onopen = null; channel.onerror = null; }
+    if (pc) { pc.onconnectionstatechange = null; pc.ondatachannel = null; }
+    this.channel = null; this.pc = null;
+    const retire = () => { channel?.close(); pc?.close(); if (room) void this.api.end(room, keepalive); };
+    if (graceful && !keepalive) setTimeout(retire, 250); else retire();
     if (this.protocol) {
       try { this.protocol.close(); } catch { /* Continue transport and capability teardown. */ }
       finally { try { this.protocol.free(); } catch { /* No state may be reused. */ } this.protocol = null; }
     }
     this.module = null; this.joinDeadline = null; this.sessionDeadline = null; this.joinAnchor = null; this.sessionAnchor = null; this.firstCreateAttempt = null; this.connectedAt = null; this.view = empty('closed'); this.update({ phase: 'closed', error: reason });
-    if (room) void this.api.end(room, keepalive);
   }
 }

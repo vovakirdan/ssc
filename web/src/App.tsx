@@ -1,46 +1,27 @@
-import { useEffect, useState, type FormEvent } from 'react';
-import { BrowserChat, type ChatView } from './chat';
+import { useEffect, useState, useSyncExternalStore } from 'react';
+import { ThemeProvider, ThemeControl } from '../../src/chat/theme';
+import { ChatPanel } from '../../src/chat/ui/ChatPanel';
+import { HelpDialog } from '../../src/chat/ui/HelpDialog';
+import { BrowserChat } from './chat';
 
 const labels = {
   home: 'Приватный разговор по одной ссылке', preview: 'Вас пригласили в приватный чат', working: 'Готовим защищённое соединение…',
   waiting: 'Приглашение готово', connecting: 'Соединяемся с собеседником…', verification: 'Сверьте код с собеседником',
   waiting_peer: 'Ожидаем подтверждения собеседника…', chat: 'Защищённый чат', recovering: 'Восстанавливаем связь…', closed: 'Чат завершён',
 };
-function Conversation({ chat, view }: { chat: BrowserChat; view: ChatView }) {
-  const [text, setText] = useState('');
-  const [sending, setSending] = useState(false);
-  const send = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault(); if (sending || !text.trim()) return;
-    setSending(true); const message = text; setText('');
-    try { await chat.send(message); } finally { setSending(false); }
-  };
-  return <>
-    <ol className="messages" aria-label="Переписка" aria-live="polite" aria-relevant="additions">
-      {view.messages.map(message => <li key={message.id} className={message.own ? 'message own' : 'message'}>
-        <span className="message-author">{message.own ? 'Вы · передано каналу' : 'Собеседник'}</span><p>{message.text}</p>
-      </li>)}
-      {view.messages.length === 0 && <li className="muted">Сообщения остаются только в памяти этой страницы.</li>}
-    </ol>
-    <form onSubmit={event => { void send(event); }} className="composer">
-      <label className="visually-hidden" htmlFor="message">Сообщение</label>
-      <textarea id="message" aria-label="Сообщение" value={text} onChange={event => setText(event.target.value)} rows={2} maxLength={256 * 1024}
-        disabled={sending || view.phase !== 'chat'} placeholder="Напишите сообщение…" />
-      <button type="submit" disabled={sending || view.phase !== 'chat' || !text.trim()}>Отправить</button>
-    </form>
-    <p className="fine">«Передано каналу» означает передачу вашему соединению, а не подтверждение прочтения.</p>
-  </>;
-}
-export default function App() {
+function WebContent() {
   const [chat] = useState(() => new BrowserChat());
   const [view, setView] = useState(() => chat.snapshot());
+  const state = useSyncExternalStore(chat.conversation.subscribe, chat.conversation.snapshot, chat.conversation.snapshot);
+  const [enteredChat, setEnteredChat] = useState(false), [help, setHelp] = useState(false);
   const [compared, setCompared] = useState(false);
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState(false);
   useEffect(() => {
-    const unsubscribe = chat.subscribe(setView);
-    const pagehide = () => chat.close(null, true);
+    const unsubscribe = chat.subscribe(next => { setView(next); if (next.phase === 'chat') setEnteredChat(true); });
+    const pagehide = () => chat.leave(true);
     window.addEventListener('pagehide', pagehide);
-    return () => { unsubscribe(); window.removeEventListener('pagehide', pagehide); chat.close(null, true); };
+    return () => { unsubscribe(); window.removeEventListener('pagehide', pagehide); chat.leave(true); };
   }, [chat]);
   const remaining = view.remainingSeconds;
   const copy = async () => {
@@ -48,9 +29,10 @@ export default function App() {
     catch { setCopyError(true); }
   };
   const active = !['home', 'preview', 'closed'].includes(view.phase);
-  const conversation = ['chat', 'recovering'].includes(view.phase);
+  const conversation = enteredChat && ['chat', 'recovering', 'closed'].includes(view.phase);
+  if (conversation) return <main className="ssc-web-conversation"><ChatPanel model={chat.conversation} state={state} ready={view.phase === 'chat'} remainingSeconds={remaining} capture={{ platform: 'browser', enabled: false, limitation: 'Браузер не может надёжно запретить снимок или запись экрана.' }} onExit={() => chat.leave()} />{view.phase === 'closed' && <a className="button primary" href="/">Создать новый чат</a>}</main>;
   return <main className="shell">
-    <header className="brand"><span className="brand-icon" aria-hidden="true">◈</span><div><p>SECRET CHAT</p><span>Без регистрации · один собеседник</span></div></header>
+    <header className="brand"><span className="brand-icon" aria-hidden="true">◈</span><div><p>SECRET CHAT</p><span>Без регистрации · один собеседник</span></div><div className="web-header-actions"><ThemeControl /><button className="help-button" aria-label="Как защищён чат" onClick={() => setHelp(true)}>?</button></div></header>
     <section className={`card ${conversation ? 'conversation' : ''}`}>
       <div className="card-heading"><span className="badge">{view.phase === 'chat' ? 'Код подтверждён с двух сторон' : 'Временный чат'}</span><h1>{labels[view.phase]}</h1></div>
       {view.error && <p className="notice" role="alert">{view.error}</p>}
@@ -88,10 +70,13 @@ export default function App() {
         <span>Осталось <time aria-label="Оставшееся время">{Math.floor(remaining / 60).toString().padStart(2, '0')}:{(remaining % 60).toString().padStart(2, '0')}</time></span>
         {remaining <= 60 ? <strong role="status">До завершения чата меньше минуты.</strong> : remaining <= 300 ? <strong role="status">До завершения чата меньше пяти минут.</strong> : null}
       </div>}
-      {conversation && <Conversation chat={chat} view={view} />}
-      {active && <button className="exit" onClick={() => chat.close('Вы вышли. Разговор завершён, его историю нельзя восстановить в приложении.')}>Выйти и завершить чат</button>}
+
+      {active && <button className="exit" onClick={() => chat.leave()}>Выйти и завершить чат</button>}
       {view.phase === 'closed' && <div className="stack"><p>Этот разговор нельзя восстановить. Для следующего подключения понадобится новая ссылка.</p><a className="button primary" href="/">Создать новый чат</a></div>}
     </section>
+    {help && <HelpDialog onClose={() => setHelp(false)} capture={{ platform: 'browser', enabled: false, limitation: 'Браузер не может запретить все способы записи экрана.' }} />}
     <footer><p>Сообщения шифруются на устройствах. Сервер помогает установить соединение и при необходимости передаёт зашифрованный трафик.</p><p>Сверка кода обязательна. Эта страница не защищает от доступа к самому устройству.</p><p>Веб-версия требует доверия к серверу, который отдаёт код страницы. Сохранённые собеседником копии она удалить не может.</p></footer>
   </main>;
 }
+
+export default function App() { return <ThemeProvider><WebContent /></ThemeProvider>; }

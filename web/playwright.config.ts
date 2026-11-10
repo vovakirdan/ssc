@@ -7,7 +7,7 @@ export default defineConfig({
   use: { baseURL: process.env.SSC_WEB_TEST_URL || 'http://127.0.0.1:1430', trace: 'off', screenshot: 'off', video: 'off' },
   webServer: process.env.SSC_WEB_TEST_URL ? undefined : { command: 'npm run web:dev', url: 'http://127.0.0.1:1430', reuseExistingServer: !process.env.CI, timeout: 30_000 },
   projects: [
-    { name: 'chromium', use: { ...devices['Desktop Chrome'], launchOptions: { args: ['--allow-loopback-in-peer-connection'] } } },
+    { name: 'chromium', use: { ...devices['Desktop Chrome'], launchOptions: { args: ['--allow-loopback-in-peer-connection', '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'] } } },
     ...(process.env.SSC_WEB_BROWSER_MATRIX === '1' ? [
       { name: 'firefox', use: { ...devices['Desktop Firefox'] } },
       { name: 'webkit', use: { ...devices['Desktop Safari'] } },

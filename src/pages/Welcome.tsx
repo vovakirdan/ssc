@@ -43,7 +43,7 @@ const Welcome = ({ onStart, onSettings }: WelcomeProps) => {
             />
           </h1>
           <p className="text-slate-300 text-lg">
-            Супер секретный чат с end-to-end шифрованием
+            Приватный разговор со сквозным шифрованием
           </p>
         </div>
 
@@ -63,7 +63,7 @@ const Welcome = ({ onStart, onSettings }: WelcomeProps) => {
                 <p className="text-slate-400 text-sm">
                   <DecryptedText
                     key={animationKey + 1} // Разный ключ для второго компонента
-                    text="Никто не может прочитать ваши сообщения"
+                    text="Ключи переписки остаются у участников"
                     speed={100}
                     animateOn="view"
                   />
@@ -77,7 +77,7 @@ const Welcome = ({ onStart, onSettings }: WelcomeProps) => {
               <Users className="w-8 h-8 text-cyan-500" />
               <div>
                 <h3 className="text-white font-semibold">P2P соединение</h3>
-                <p className="text-slate-400 text-sm">Прямое соединение без серверов</p>
+                <p className="text-slate-400 text-sm">Напрямую или через зашифрованный ретранслятор</p>
               </div>
             </CardContent>
           </Card>

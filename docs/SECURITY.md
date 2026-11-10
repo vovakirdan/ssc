@@ -1,6 +1,6 @@
 # Desktop security maintenance
 
-The current protocol is v3. Both participants must update; v2 invitations and handshake
+The current protocol is v4. Both participants must update; v2/v3 invitations and handshake
 frames are rejected. Manual invitation exchange and configurable STUN/TURN remain available.
 The pairing helper is optional for manual exchange. It sees connection metadata, never chat
 message encryption keys. A shared link is a capability: send it only to its intended recipient.
@@ -96,3 +96,11 @@ or renderer IPC. Access registry and revocation journal persist separately from 
 chat invitations. Revocation stops new issuance immediately; complete relay revocation is
 bounded by remaining600-second credentials plus15seconds of guard enforcement, tested
 separately from invitation expiry and the lifetime of an allowed active chat.
+
+## Media and native microphone boundary (0.4)
+
+All attachment metadata/parts, voice files, receipts, reactions and Bye are application-AEAD encrypted after two-sided SAS. Incoming control/file queues and logical buffers are bounded. SHA256 completion verifies original bytes; sources are not scrubbed/transcoded by the app. An OS picker may already transform an original. Never auto-execute unknown documents or SVG/HTML; downloading is explicit. A received receipt is an authenticated peer claim, not proof of human reading.
+
+Linux explicitly enables WebKit media-stream API but grants microphone permission only through a current verified-session, main-window, single-use5s authorization after Record. Retirement revokes it; there is no startup device probe. Windows uses its normal permission prompt. Native macOS packaging/usage descriptions and physical microphone acceptance are not inferred from browser or Linux unit tests. Synthetic Chromium microphone tests are labelled as hardware simulation, with real recorder/WASM/WebRTC unchanged.
+
+Native window capture protection is requested on Windows; Linux/macOS support is not presented as guaranteed. Browser curtain and display-capture policy do not prevent OS/external screenshots. Decorative cleanup uses no snapshots of messages or media.

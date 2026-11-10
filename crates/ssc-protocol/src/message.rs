@@ -59,26 +59,40 @@ impl Drop for PartialMessage {
     }
 }
 
+#[derive(Clone, PartialEq, Eq)]
+pub struct TextMessage {
+    pub id: String,
+    pub text: String,
+}
+impl std::fmt::Debug for TextMessage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("TextMessage(..)")
+    }
+}
+
 #[derive(Default)]
 pub struct Reassembler {
     pending: Option<PartialMessage>,
 }
 impl Reassembler {
     pub fn push(&mut self, payload: &[u8]) -> Result<Option<String>, ProtocolError> {
+        self.push_with_id(payload)
+            .map(|text| text.map(|text| text.text))
+    }
+    pub fn push_with_id(&mut self, payload: &[u8]) -> Result<Option<TextMessage>, ProtocolError> {
         let result = self.push_inner(payload);
         if result.is_err() {
             self.pending = None;
         }
         result
     }
-    fn push_inner(&mut self, payload: &[u8]) -> Result<Option<String>, ProtocolError> {
+    fn push_inner(&mut self, payload: &[u8]) -> Result<Option<TextMessage>, ProtocolError> {
         if payload.len() > MAX_CHUNK_JSON_BYTES {
             return Err(error("invalid_chunk", "Часть сообщения слишком большая"));
         }
         let chunk: Chunk = serde_json::from_slice(payload)
             .map_err(|_| error("invalid_chunk", "Повреждена часть сообщения"))?;
-        if chunk.id.len() != 32
-            || !chunk.id.bytes().all(|b| b.is_ascii_hexdigit())
+        if !crate::events::valid_id(&chunk.id)
             || chunk.total == 0
             || chunk.total > MAX_CHUNKS
             || chunk.index >= chunk.total
@@ -134,7 +148,12 @@ impl Reassembler {
             .take()
             .ok_or_else(|| error("incomplete_message", "Не удалось собрать сообщение"))?;
         String::from_utf8(std::mem::take(&mut complete.bytes))
-            .map(Some)
+            .map(|text| {
+                Some(TextMessage {
+                    id: complete.id.clone(),
+                    text,
+                })
+            })
             .map_err(|_| error("invalid_utf8", "Некорректное кодирование сообщения"))
     }
 }

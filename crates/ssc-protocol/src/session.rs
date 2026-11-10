@@ -1,8 +1,9 @@
 use crate::{
     crypto::CryptoCtx,
+    decode_event, encode_event,
     handshake::{self, Handshake, Role},
     message::{self, Reassembler, KIND_CHUNK, KIND_READY},
-    ProtocolError,
+    ChatEvent, ProtocolError, KIND_EVENT,
 };
 use zeroize::Zeroizing;
 
@@ -12,6 +13,7 @@ pub struct ReceiveEvent {
     pub sas: Option<String>,
     pub peer_ready: bool,
     pub message: Option<String>,
+    pub event: Option<ChatEvent>,
 }
 
 /// One ordered reliable binary DataChannel. The transport must serialize all calls
@@ -104,9 +106,26 @@ impl Session {
                 KIND_READY if payload.is_empty() => self.peer_ready = true,
                 KIND_READY => return Err(error("invalid_ready")),
                 KIND_CHUNK if self.local_ready && self.peer_ready => {
-                    event.message = self.reassembler.push(&payload)?
+                    if let Some(text) = self.reassembler.push_with_id(&payload)? {
+                        event.message = Some(text.text.clone());
+                        event.event = Some(ChatEvent::Text {
+                            id: text.id,
+                            text: text.text,
+                        });
+                    }
                 }
                 KIND_CHUNK => return Err(error("verification_required")),
+                KIND_EVENT if self.local_ready && self.peer_ready => {
+                    let received = decode_event(&payload)?;
+                    if let ChatEvent::Text { text, .. } = &received {
+                        event.message = Some(text.clone());
+                    }
+                    if matches!(received, ChatEvent::Bye { .. }) {
+                        self.close();
+                    }
+                    event.event = Some(received);
+                }
+                KIND_EVENT => return Err(error("verification_required")),
                 _ => return Err(error("invalid_frame")),
             }
         }
@@ -167,6 +186,24 @@ impl Session {
             .map(|chunk| crypto.encrypt(KIND_CHUNK, &Zeroizing::new(chunk)))
             .collect();
         if result.is_err() {
+            self.close();
+        }
+        result
+    }
+    pub fn send_event(&mut self, event: ChatEvent) -> Result<Vec<u8>, ProtocolError> {
+        if self.closed {
+            return Err(error("session_closed"));
+        }
+        if !self.local_ready || !self.peer_ready {
+            return Err(error("verification_required"));
+        }
+        let payload = zeroize::Zeroizing::new(encode_event(&event)?);
+        let crypto = self
+            .crypto
+            .as_mut()
+            .ok_or_else(|| error("handshake_required"))?;
+        let result = crypto.encrypt(KIND_EVENT, &payload);
+        if result.is_err() || matches!(event, ChatEvent::Bye { .. }) {
             self.close();
         }
         result

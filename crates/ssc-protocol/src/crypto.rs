@@ -7,9 +7,9 @@ use hkdf::Hkdf;
 use sha2::Sha256;
 use x25519_dalek::{PublicKey, StaticSecret};
 use zeroize::{Zeroize, Zeroizing};
-pub const VERSION: u8 = 3;
+pub const VERSION: u8 = 4;
 const HEADER_LEN: usize = 10;
-const MAX_FRAME_BYTES: usize = 70 * 1024;
+const MAX_FRAME_BYTES: usize = crate::events::MAX_EVENT_FRAME_BYTES;
 fn error(code: &str, message: &str) -> ProtocolError {
     ProtocolError::new(code, "crypto", message, false)
 }
@@ -54,7 +54,7 @@ impl KeyExchange {
         }
         let hk = Hkdf::<Sha256>::new(Some(transcript), shared.as_bytes());
         let mut keys = Zeroizing::new([0u8; 64]);
-        hk.expand(b"ssc-chat-v3/directional-keys", keys.as_mut())
+        hk.expand(b"ssc-chat-v4/directional-keys", keys.as_mut())
             .map_err(|_| error("key_derivation", "Не удалось получить ключи шифрования"))?;
         let (k1, k2) = keys.split_at(32);
         let (send, recv) = if initiator { (k1, k2) } else { (k2, k1) };
@@ -63,7 +63,7 @@ impl KeyExchange {
         let opening = ChaCha20Poly1305::new_from_slice(recv)
             .map_err(|_| error("key_derivation", "Некорректный ключ шифрования"))?;
         let mut sas_key = Zeroizing::new([0u8; 32]);
-        hk.expand(b"ssc-chat-v3/sas", sas_key.as_mut())
+        hk.expand(b"ssc-chat-v4/sas", sas_key.as_mut())
             .map_err(|_| error("key_derivation", "Не удалось получить код проверки"))?;
         let sas = hex::encode(&sas_key[..6]);
         Ok(CryptoCtx {
@@ -92,7 +92,9 @@ impl Drop for CryptoCtx {
 }
 impl CryptoCtx {
     pub fn encrypt(&mut self, kind: u8, payload: &[u8]) -> Result<Vec<u8>, ProtocolError> {
-        if !(1..=2).contains(&kind) || payload.len() > MAX_FRAME_BYTES - HEADER_LEN - 16 {
+        if !matches!(kind, 1 | 2 | crate::KIND_EVENT)
+            || payload.len() > MAX_FRAME_BYTES - HEADER_LEN - 16
+        {
             return Err(error("invalid_frame", "Недопустимый кадр сообщения"));
         }
         let seq = self.next_send;
@@ -122,7 +124,7 @@ impl CryptoCtx {
         if frame.len() < HEADER_LEN + 16
             || frame.len() > MAX_FRAME_BYTES
             || frame[0] != VERSION
-            || !(1..=2).contains(&frame[1])
+            || !matches!(frame[1], 1 | 2 | crate::KIND_EVENT)
         {
             return Err(error(
                 "invalid_frame",

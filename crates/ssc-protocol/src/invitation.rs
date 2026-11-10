@@ -119,7 +119,7 @@ pub fn enc_bundle(bundle: &ConnectionBundle) -> Result<String, ProtocolError> {
     let bytes = gz
         .finish()
         .map_err(|_| invitation_error("compression_failed", "Не удалось упаковать приглашение"))?;
-    let encoded = format!("v3:{}", STANDARD.encode(bytes));
+    let encoded = format!("v4:{}", STANDARD.encode(bytes));
     if encoded.len() > MAX_INVITATION_BYTES {
         return Err(invitation_error(
             "invitation_too_large",
@@ -135,7 +135,7 @@ pub fn dec_bundle(encoded: &str) -> Result<ConnectionBundle, ProtocolError> {
             "Приглашение слишком большое",
         ));
     }
-    let data = encoded.trim().strip_prefix("v3:").ok_or_else(|| {
+    let data = encoded.trim().strip_prefix("v4:").ok_or_else(|| {
         invitation_error(
             "unsupported_version",
             "Версия приглашения не поддерживается; обновите приложение у обоих участников",
@@ -351,7 +351,7 @@ mod tests {
     }
     #[test]
     fn malformed_invitation_and_zip_bomb_return_safe_errors() {
-        for input in ["v3:!", "v3:eA==", "v3:", "v2:eA=="] {
+        for input in ["v4:!", "v4:eA==", "v4:", "v2:eA=="] {
             assert!(dec_bundle(input).is_err());
         }
         assert_eq!(
@@ -364,7 +364,7 @@ mod tests {
         gz.write_all(&vec![b' '; MAX_DECOMPRESSED_BYTES + 1])
             .unwrap();
         assert_eq!(
-            dec_bundle(&format!("v3:{}", STANDARD.encode(gz.finish().unwrap())))
+            dec_bundle(&format!("v4:{}", STANDARD.encode(gz.finish().unwrap())))
                 .unwrap_err()
                 .code,
             "invitation_too_large"

@@ -16,8 +16,14 @@ fn main() {
     a.receive(&ready_b).unwrap();
     b.receive(&ready_a).unwrap();
     let text = a.send_text("Привет из WASM 🔒", [7; 16]).unwrap().remove(0);
+    let event = a
+        .send_event(ssc_protocol::ChatEvent::Reaction {
+            target: "07".repeat(16),
+            emoji: Some("🔥".into()),
+        })
+        .unwrap();
     println!(
         "{}",
-        serde_json::json!({"commit_a":hex::encode(ac),"commit_b":hex::encode(bc),"reveal_a":hex::encode(ar),"reveal_b":hex::encode(br),"sas":sas,"ready_a":hex::encode(ready_a),"ready_b":hex::encode(ready_b),"text":hex::encode(text)})
+        serde_json::json!({"commit_a":hex::encode(ac),"commit_b":hex::encode(bc),"reveal_a":hex::encode(ar),"reveal_b":hex::encode(br),"sas":sas,"ready_a":hex::encode(ready_a),"ready_b":hex::encode(ready_b),"text":hex::encode(text),"event":hex::encode(event)})
     );
 }

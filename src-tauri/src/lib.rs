@@ -11,8 +11,11 @@ mod utils;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .on_permission_request(peer::microphone::permission)
         .setup(|app| {
             access::configure(app)?;
+            peer::capture::configure(app);
+            peer::microphone::configure(app)?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -32,6 +35,14 @@ pub fn run() {
             rooms::create_temporary_room,
             rooms::get_temporary_room_state,
             commands::util_api::send_text,
+            commands::util_api::send_chat_event,
+            commands::util_api::drain_chat_events,
+            commands::util_api::get_capture_protection,
+            commands::util_api::request_voice_capture,
+            commands::util_api::open_help_source,
+            commands::util_api::hash_attachment_chunk,
+            commands::util_api::finish_attachment_hash,
+            commands::util_api::abort_attachment_hash,
             commands::util_api::get_fingerprint,
             commands::util_api::is_connected,
             commands::util_api::disconnect,

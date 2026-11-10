@@ -1,4 +1,5 @@
-export interface ProtocolStep { outgoing: Uint8Array[]; sas: string | null; peer_ready: boolean; message: string | null }
+import type { ChatEvent } from '../../src/chat/types';
+export interface ProtocolStep { outgoing: Uint8Array[]; sas: string | null; peer_ready: boolean; message: string | null; event: ChatEvent | null }
 export interface ProtocolSession {
   start(): Uint8Array[];
   receive(frame: Uint8Array): ProtocolStep;
@@ -7,6 +8,7 @@ export interface ProtocolSession {
   local_ready(): boolean;
   confirm(): Uint8Array;
   send_text(text: string, messageId: Uint8Array): Uint8Array[];
+  send_event(event: string): Uint8Array;
   close(): void;
   free(): void;
 }
@@ -14,6 +16,7 @@ export interface DecodedInvitation { session_id: string; sdp_type: 'offer' | 'an
 export interface ProtocolModule {
   default(): Promise<unknown>;
   ProtocolSession: new (id: string, initiator: boolean, seed: Uint8Array, nonce: Uint8Array) => ProtocolSession;
+  FileHasher: new () => { update(bytes: Uint8Array): void; finish(): string; abort(): void; free(): void };
   encode_invitation(id: string, sdpType: 'offer' | 'answer', sdp: string, candidates: string): string;
   decode_invitation(encoded: string): DecodedInvitation;
 }

@@ -12,6 +12,7 @@ export interface SessionState {
   generation: number;
   phase: 'idle' | 'invitation' | 'ice' | 'key_exchange' | 'verification' | 'waiting_peer' | 'connected' | 'recovering' | 'closed';
   route: 'direct' | 'relay' | null;
+  close_reason?: 'local_left' | 'peer_left' | 'expired' | 'connection_lost' | null;
 }
 export interface VerificationCode { generation: number; sas: string }
 export const initialSession: SessionState = { generation: 0, phase: 'idle', route: null };

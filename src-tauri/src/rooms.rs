@@ -1,4 +1,4 @@
-//! RAM-only temporary-room capabilities; cryptographic v3 remains in the peer core.
+//! RAM-only temporary-room capabilities; cryptographic v4 remains in the peer core.
 use crate::{
     commands::candidate_api::{decode_checked, local_bundle, remote},
     connect::{LinkPhase, LinkSnapshot, Role},
@@ -594,7 +594,7 @@ async fn expiry_watch(s: Arc<Session>, room: Arc<Operation>) {
         }
         if let Err(error) = room.lease() {
             room.fail(&s, &error);
-            s.close().await;
+            s.close_local(ssc_protocol::ByeReason::Expired).await;
             return;
         }
         tokio::select! {biased;
@@ -651,7 +651,11 @@ async fn begin(app: AppHandle, input: Input) -> Result<LinkSnapshot, AppError> {
         if let Err(error) = run(&s, &room, input).await {
             if s.active() {
                 room.fail(&s, &error);
-                s.close().await;
+                if error.code == "room_expired" {
+                    s.close_local(ssc_protocol::ByeReason::Expired).await;
+                } else {
+                    s.close().await;
+                }
             }
         }
     });

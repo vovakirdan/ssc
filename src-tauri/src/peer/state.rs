@@ -7,6 +7,8 @@ use super::{
 use crate::errors::AppError;
 use once_cell::sync::Lazy;
 use serde::Serialize;
+use ssc_protocol::{ByeReason, ChatEvent, FileHasher};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 use tauri::{AppHandle, Emitter};
 use webrtc::{data_channel::RTCDataChannel, peer_connection::RTCPeerConnection};
@@ -40,6 +42,27 @@ pub struct Snapshot {
     pub generation: u64,
     pub phase: Phase,
     pub route: Option<String>,
+    pub close_reason: Option<CloseReason>,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CloseReason {
+    LocalLeft,
+    PeerLeft,
+    Expired,
+    ConnectionLost,
+}
+
+#[derive(Serialize)]
+pub struct ChatEvents {
+    pub generation: u64,
+    pub events: Vec<ChatEvent>,
+}
+
+pub(super) struct QueuedEvent {
+    pub event: ChatEvent,
+    pub bytes: usize,
 }
 
 #[derive(Clone, Serialize)]
@@ -48,7 +71,11 @@ pub struct Verification {
     pub sas: String,
 }
 
-type Resources = (Option<Arc<RTCDataChannel>>, Option<Arc<RTCPeerConnection>>);
+struct Resources {
+    dc: Option<Arc<RTCDataChannel>>,
+    pc: Option<Arc<RTCPeerConnection>>,
+    farewell: Option<CryptoCtx>,
+}
 
 pub struct SessionData {
     pub connection_id: String,
@@ -63,13 +90,17 @@ pub struct SessionData {
     pub peer_ready: bool,
     pub transport_connected: bool,
     pub closed: bool,
+    pub close_reason: Option<CloseReason>,
     pub recovering: bool,
     pub recovery_epoch: u64,
     pub candidates: Vec<IceCandidate>,
     pub reassembler: Reassembler,
     pub route: Option<String>,
     pub inbox: Vec<ReceivedMessage>,
-    pub next_message_id: u64,
+    pub(super) event_inbox: Vec<QueuedEvent>,
+    pub(super) event_bytes: usize,
+    pub hashers: HashMap<String, FileHasher>,
+    pub(super) microphone_until: Option<std::time::Instant>,
 }
 pub struct Session {
     pub generation: u64,
@@ -102,13 +133,17 @@ impl Session {
                 peer_ready: false,
                 transport_connected: false,
                 closed: false,
+                close_reason: None,
                 recovering: false,
                 recovery_epoch: 0,
                 candidates: Vec::new(),
                 reassembler: Reassembler::default(),
                 route: None,
                 inbox: Vec::new(),
-                next_message_id: 0,
+                event_inbox: Vec::new(),
+                event_bytes: 0,
+                hashers: HashMap::new(),
+                microphone_until: None,
             }),
         })
     }
@@ -171,7 +206,7 @@ impl Session {
         });
     }
     pub fn expire_handshake(&self) {
-        if let Some(resources) = self.retire(None, true) {
+        if let Some(resources) = self.retire(None, true, CloseReason::ConnectionLost, false) {
             crate::diagnostics::record(
                 self.generation,
                 "crypto",
@@ -208,6 +243,7 @@ impl Session {
             generation: self.generation,
             phase,
             route: d.route.clone(),
+            close_reason: d.close_reason,
         }
     }
     pub fn active(&self) -> bool {
@@ -225,6 +261,58 @@ impl Session {
                 true,
             ))
         }
+    }
+    pub fn ensure_generation_ready(&self, generation: u64) -> Result<(), AppError> {
+        let d = lock(&self.data);
+        if self.generation != generation {
+            return Err(AppError::new(
+                "session_changed",
+                "session",
+                "Подключение уже изменилось",
+                true,
+            ));
+        }
+        if d.closed {
+            return Err(AppError::new(
+                "session_closed",
+                "session",
+                "Сессия уже завершена",
+                true,
+            ));
+        }
+        if !d.local_ready || !d.peer_ready || d.crypto.is_none() {
+            return Err(AppError::new(
+                "not_ready",
+                "verification",
+                "Сверка кода ещё не завершена",
+                true,
+            ));
+        }
+        Ok(())
+    }
+    pub fn drain_chat_events(&self, generation: u64) -> ChatEvents {
+        let mut d = lock(&self.data);
+        let events = if self.generation == generation && !d.closed {
+            d.event_bytes = 0;
+            d.inbox.clear();
+            std::mem::take(&mut d.event_inbox)
+                .into_iter()
+                .map(|item| item.event)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        ChatEvents { generation, events }
+    }
+    pub fn drain_messages(&self, generation: u64) -> Vec<ReceivedMessage> {
+        let mut d = lock(&self.data);
+        if self.generation != generation || d.closed {
+            return Vec::new();
+        }
+        d.event_inbox
+            .retain(|item| !matches!(&item.event, ChatEvent::Text { .. }));
+        d.event_bytes = d.event_inbox.iter().map(|item| item.bytes).sum();
+        std::mem::take(&mut d.inbox)
     }
     pub fn emit<T: Serialize + Clone>(&self, event: &str, payload: T) {
         let _events = lock(&self.events);
@@ -266,7 +354,13 @@ impl Session {
             serde_json::json!({"generation":self.generation,"error":error}),
         );
     }
-    fn retire(&self, expected_epoch: Option<u64>, handshake_only: bool) -> Option<Resources> {
+    fn retire(
+        &self,
+        expected_epoch: Option<u64>,
+        handshake_only: bool,
+        reason: CloseReason,
+        farewell: bool,
+    ) -> Option<Resources> {
         let mut d = lock(&self.data);
         if d.closed
             || expected_epoch.is_some_and(|epoch| !d.recovering || d.recovery_epoch != epoch)
@@ -275,7 +369,13 @@ impl Session {
             return None;
         }
         d.closed = true;
+        d.close_reason = Some(reason);
         d.recovery_epoch += 1;
+        let farewell_crypto = if farewell && d.local_ready && d.peer_ready && d.dc_open {
+            d.crypto.take()
+        } else {
+            None
+        };
         d.crypto = None;
         d.exchange = None;
         d.role = None;
@@ -285,20 +385,70 @@ impl Session {
         d.peer_ready = false;
         d.candidates.clear();
         d.inbox.clear();
-        let resources = (d.dc.take(), d.pc.take());
+        d.event_inbox.clear();
+        d.event_bytes = 0;
+        d.hashers.clear();
+        d.microphone_until = None;
+        let resources = Resources {
+            dc: d.dc.take(),
+            pc: d.pc.take(),
+            farewell: farewell_crypto,
+        };
         drop(d);
         self.stopped.send_replace(true);
-        crate::connect::retire(self);
+        if !farewell {
+            crate::connect::retire(self);
+        }
         Some(resources)
     }
     pub async fn close(&self) {
-        if let Some(resources) = self.retire(None, false) {
+        if let Some(resources) = self.retire(None, false, CloseReason::ConnectionLost, false) {
             self.publish();
             shutdown(resources).await;
         }
     }
+    pub async fn close_local(&self, reason: ByeReason) {
+        let close_reason = match reason {
+            ByeReason::Exit => CloseReason::LocalLeft,
+            ByeReason::Expired => CloseReason::Expired,
+        };
+        if let Some(mut resources) = self.retire(None, false, close_reason, true) {
+            self.publish();
+            let _ = tokio::time::timeout(std::time::Duration::from_millis(250), async {
+                let _sending = self.sending.lock().await;
+                if let (Some(mut crypto), Some(dc)) =
+                    (resources.farewell.take(), resources.dc.as_ref())
+                {
+                    if let Ok(payload) = ssc_protocol::encode_event(&ChatEvent::Bye { reason }) {
+                        if let Ok(frame) = crypto.encrypt(ssc_protocol::KIND_EVENT, &payload) {
+                            if dc.send(&bytes::Bytes::from(frame)).await.is_ok() {
+                                while dc.buffered_amount().await != 0 {
+                                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                                }
+                            }
+                        }
+                    }
+                }
+            })
+            .await;
+            resources.farewell = None;
+            crate::connect::retire(self);
+            shutdown(resources).await;
+        }
+    }
+    pub fn close_authenticated(&self, reason: ByeReason) {
+        let reason = match reason {
+            ByeReason::Exit => CloseReason::PeerLeft,
+            ByeReason::Expired => CloseReason::Expired,
+        };
+        if let Some(resources) = self.retire(None, false, reason, false) {
+            self.publish();
+            tauri::async_runtime::spawn(shutdown(resources));
+        }
+    }
     pub async fn expire_recovery(&self, epoch: u64) {
-        if let Some(resources) = self.retire(Some(epoch), false) {
+        if let Some(resources) = self.retire(Some(epoch), false, CloseReason::ConnectionLost, false)
+        {
             crate::diagnostics::record(
                 self.generation,
                 "network",
@@ -312,17 +462,17 @@ impl Session {
     }
     pub fn close_from_callback(&self) {
         // Transport callbacks must not wait for the transport's own receive/state tasks.
-        if let Some(resources) = self.retire(None, false) {
+        if let Some(resources) = self.retire(None, false, CloseReason::ConnectionLost, false) {
             self.publish();
             tauri::async_runtime::spawn(shutdown(resources));
         }
     }
 }
-async fn shutdown((dc, pc): Resources) {
-    if let Some(dc) = dc {
+async fn shutdown(resources: Resources) {
+    if let Some(dc) = resources.dc {
         let _ = dc.close().await;
     }
-    if let Some(pc) = pc {
+    if let Some(pc) = resources.pc {
         let _ = pc.close().await;
     }
 }

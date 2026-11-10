@@ -52,7 +52,7 @@ fn error(code: &str) -> ProtocolError {
 
 fn commitment(context: &[u8; 32], role: u8, public: &[u8; 32], nonce: &[u8; 32]) -> [u8; 32] {
     let mut hash = Sha256::new();
-    hash.update(b"ssc-chat-v3/key-commitment\0");
+    hash.update(b"ssc-chat-v4/key-commitment\0");
     hash.update([VERSION, role]);
     hash.update(context);
     hash.update(public);
@@ -65,7 +65,7 @@ impl Handshake {
         let exchange = KeyExchange::from_seed(seed);
         let nonce = Zeroizing::new(nonce);
         let mut hash = Sha256::new();
-        hash.update(b"ssc-chat-v3/session-context\0");
+        hash.update(b"ssc-chat-v4/session-context\0");
         hash.update((session_id.len() as u64).to_be_bytes());
         hash.update(session_id.as_bytes());
         let context = hash.finalize().into();
@@ -176,7 +176,7 @@ impl Handshake {
                     .ok_or_else(|| error("duplicate_reveal"))?
                     .public_key();
                 let mut hash = Sha256::new();
-                hash.update(b"ssc-chat-v3/transcript\0");
+                hash.update(b"ssc-chat-v4/transcript\0");
                 hash.update([VERSION]);
                 hash.update(self.context);
                 // Explicit role order gives both endpoints exactly the same transcript.

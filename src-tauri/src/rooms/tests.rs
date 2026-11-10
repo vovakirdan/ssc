@@ -418,7 +418,7 @@ async fn room_state_contains_only_timing_and_generation_and_old_helpers_remain_i
 #[test]
 fn temporary_answers_must_match_the_existing_connection_id() {
     let s = Session::new(90008, "a".repeat(32), None);
-    let legacy="v3:H4sIAAAAAAAE/6WOzQ5AMBCE32XPDou49MZriAOl1E+Llot4d0P6BrLJZna/ZGYuciTC8iQ4okORoLqRLUGvQXeqH/Q4zYux67Y7f5yg6qV58W/g4/YveNEI4/eGb8bMd0S6xU9aYzrptTUxqEfhOEkBJVRZ3Q9J1GFGwwAAAA==";
+    let legacy="v4:H4sIAAAAAAAE/6WOzQ5AMBCE32XPDou49MZriAOl1E+Llot4d0P6BrLJZna/ZGYuciTC8iQ4okORoLqRLUGvQXeqH/Q4zYux67Y7f5yg6qV58W/g4/YveNEI4/eGb8bMd0S6xU9aYzrptTUxqEfhOEkBJVRZ3Q9J1GFGwwAAAA==";
     let mut bundle = ssc_protocol::invitation::dec_bundle(legacy).unwrap();
     bundle.sdp_payload.sdp.sdp_type = ssc_protocol::invitation::SdpType::Answer;
     bundle.sdp_payload.id = "b".repeat(32);

@@ -188,7 +188,7 @@ pub(crate) async fn new_peer_with_servers(
     }));
     if initiator {
         let dc = pc
-            .create_data_channel("ssc-v3", Some(RTCDataChannelInit::default()))
+            .create_data_channel("ssc-v4", Some(RTCDataChannelInit::default()))
             .await
             .map_err(|_| {
                 AppError::new(

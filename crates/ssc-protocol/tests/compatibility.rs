@@ -1,29 +1,35 @@
 use ssc_protocol::{crypto::KeyExchange, invitation, message, Session};
-const LEGACY_INVITATION:&str="v3:H4sIAAAAAAAE/6WOzQ5AMBCE32XPDou49MZriAOl1E+Llot4d0P6BrLJZna/ZGYuciTC8iQ4okORoLqRLUGvQXeqH/Q4zYux67Y7f5yg6qV58W/g4/YveNEI4/eGb8bMd0S6xU9aYzrptTUxqEfhOEkBJVRZ3Q9J1GFGwwAAAA==";
+const CURRENT_INVITATION:&str="v4:H4sIAAAAAAAE/6WOzQ5AMBCE32XPDou49MZriAOl1E+Llot4d0P6BrLJZna/ZGYuciTC8iQ4okORoLqRLUGvQXeqH/Q4zYux67Y7f5yg6qV58W/g4/YveNEI4/eGb8bMd0S6xU9aYzrptTUxqEfhOEkBJVRZ3Q9J1GFGwwAAAA==";
 
 #[test]
-fn legacy_native_crypto_vector_remains_byte_identical() {
-    // Captured from pre-extraction desktop v3 with these seeds and transcript.
+fn v4_native_crypto_matches_independent_provider_vector() {
+    // Independently calculated with Node/OpenSSL using these public seeds and salt.
     let a = KeyExchange::from_seed([9; 32]);
     let b = KeyExchange::from_seed([17; 32]);
     let ap = a.public_key();
     let bp = b.public_key();
     let mut a = a.finish(bp, &[7; 32], true).unwrap();
     let mut b = b.finish(ap, &[7; 32], false).unwrap();
-    assert_eq!(a.sas, "5840165d3e66");
+    assert_eq!(a.sas, "aae00511cea7");
     let frame = a.encrypt(2, "legacy vector 🔒".as_bytes()).unwrap();
     assert_eq!(
         hex::encode(&frame),
-        "0302000000000000000174cebbcd4db2355cd9c923145e5f52b3cecbe816479b4a508641ab465760b2d31cb3"
+        "040200000000000000011a06f2aa6aa4ed89bf2364a5ebb327b6bed29da6a303f32a2ea23d891cc2e164a314"
     );
     assert_eq!(b.decrypt(&frame).unwrap().1, "legacy vector 🔒".as_bytes());
 }
 #[test]
-fn legacy_gzip_json_vector_remains_byte_identical() {
-    let bundle = invitation::dec_bundle(LEGACY_INVITATION).unwrap();
+fn v4_invitation_keeps_compact_codec_and_rejects_v3() {
+    assert_eq!(
+        invitation::dec_bundle(&CURRENT_INVITATION.replacen("v4:", "v3:", 1))
+            .unwrap_err()
+            .code,
+        "unsupported_version"
+    );
+    let bundle = invitation::dec_bundle(CURRENT_INVITATION).unwrap();
     assert_eq!(bundle.sdp_payload.id, "connection1");
     assert_eq!(bundle.sdp_payload.ts, 123);
-    assert_eq!(invitation::enc_bundle(&bundle).unwrap(), LEGACY_INVITATION);
+    assert_eq!(invitation::enc_bundle(&bundle).unwrap(), CURRENT_INVITATION);
     assert_eq!(message::chunks_with_id("Привет",[7;16]).unwrap()[0],br#"{"id":"07070707070707070707070707070707","index":0,"total":1,"data":"0J/RgNC40LLQtdGC"}"#);
 }
 fn connected() -> (Session, Session) {
@@ -121,11 +127,16 @@ fn complete_native_handshake_matches_fixed_cross_provider_vectors() {
         hex::encode(a.send_text("Привет из WASM 🔒", [7; 16]).unwrap().remove(0)),
         expected["text"]
     );
+    let event = ssc_protocol::ChatEvent::Reaction {
+        target: "07".repeat(16),
+        emoji: Some("🔥".into()),
+    };
+    assert_eq!(hex::encode(a.send_event(event).unwrap()), expected["event"]);
 }
 
 #[test]
 fn producing_invalid_invitation_is_rejected_before_publication() {
-    let mut bundle = invitation::dec_bundle(LEGACY_INVITATION).unwrap();
+    let mut bundle = invitation::dec_bundle(CURRENT_INVITATION).unwrap();
     bundle.sdp_payload.id.clear();
     assert_eq!(
         invitation::enc_bundle(&bundle).unwrap_err().code,

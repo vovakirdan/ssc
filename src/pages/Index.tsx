@@ -1,3 +1,6 @@
+import type { ReactNode } from 'react';
+import { NativeChrome } from '../chat/NativeChrome';
+const withChrome = (content: ReactNode) => <><NativeChrome />{content}</>;
 import { useState, useEffect } from 'react';
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
@@ -131,7 +134,7 @@ const IndexContent = () => {
   };
 
   if (mode === 'settings') {
-    return <Settings onBack={handleBack} />;
+    return withChrome(<Settings onBack={handleBack} />);
   }
 
   if (mode === 'chat') {
@@ -139,32 +142,32 @@ const IndexContent = () => {
   }
 
   if (mode === 'verify') {
-    return <VerifyFingerprint 
+    return withChrome(<VerifyFingerprint
       session={session}
       sessionError={connectionError}
       onConfirm={handleVerifyConfirm} 
       onCancel={handleVerifyCancel}
       initialSas={pendingSas}
-    />;
+    />);
   }
 
   if (mode === 'generate') {
-    return <GenerateQR onBack={handleBack} onConnected={handleConnected} autoGenerate={true} ttl={ttl} />;
+    return withChrome(<GenerateQR onBack={handleBack} onConnected={handleConnected} autoGenerate={true} ttl={ttl} />);
   }
 
   if (mode === 'link' || mode === 'temporary') {
-    return <LinkConnection ttl={ttl} temporary={mode === 'temporary'} onBack={() => { setMode('welcome'); setShowOptions(false); loadTTL(); }} />;
+    return withChrome(<LinkConnection ttl={ttl} temporary={mode === 'temporary'} onBack={() => { setMode('welcome'); setShowOptions(false); loadTTL(); }} />);
   }
 
   if (mode === 'scan') {
-    return <ScanQR onBack={handleBack} onConnected={handleConnected} />;
+    return withChrome(<ScanQR onBack={handleBack} onConnected={handleConnected} />);
   }
 
   if (showOptions) {
-    return <ConnectionHub onCreate={handleGenerate} onJoin={() => { if (preferencesReady) setMode('scan'); }} onBack={handleBack} onLink={() => { if (preferencesReady) { loadTTL(); setMode('link'); } }} onTemporary={() => { if (preferencesReady) setMode('temporary'); }} />;
+    return withChrome(<ConnectionHub onCreate={handleGenerate} onJoin={() => { if (preferencesReady) setMode('scan'); }} onBack={handleBack} onLink={() => { if (preferencesReady) { loadTTL(); setMode('link'); } }} onTemporary={() => { if (preferencesReady) setMode('temporary'); }} />);
   }
 
-  return <>{preferencesError && <p role="alert" className="fixed top-0 left-0 right-0 bg-red-950 text-white p-3 z-40">{preferencesError}</p>}<Welcome onStart={handleStart} onSettings={handleSettings} /></>;
+  return withChrome(<>{preferencesError && <p role="alert" className="fixed top-0 left-0 right-0 bg-red-950 text-white p-3 z-40">{preferencesError}</p>}<Welcome onStart={handleStart} onSettings={handleSettings} /></>);
 };
 
 export default function Index() { return <><IndexContent /><DiagnosticsPanel /></>; }

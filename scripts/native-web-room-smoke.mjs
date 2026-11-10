@@ -12,7 +12,7 @@ try {
     window.__ssc_test_channels = [];
     window.__ssc_test_history = [];
     window.RTCPeerConnection = class extends Original {
-      constructor(config) { super(forceRelay ? { ...config, iceTransportPolicy: 'relay' } : config); window.__ssc_test_pc.push(this); this.addEventListener('connectionstatechange', () => { const local = this.localDescription?.sdp || '', remote = this.remoteDescription?.sdp || ''; window.__ssc_test_history.push({ connection: this.connectionState, ice: this.iceConnectionState, localRelay: (local.match(/ typ relay/g) || []).length, remoteRelay: (remote.match(/ typ relay/g) || []).length, localCandidates: (local.match(/a=candidate:/g) || []).length, remoteCandidates: (remote.match(/a=candidate:/g) || []).length }); }); this.addEventListener('datachannel', event => { const c = event.channel; window.__ssc_test_channels.push({ expectedLabel: c.label === 'ssc-v3', ordered: c.ordered, retries: c.maxRetransmits, lifetime: c.maxPacketLifeTime }); }); }
+      constructor(config) { super(forceRelay ? { ...config, iceTransportPolicy: 'relay' } : config); window.__ssc_test_pc.push(this); this.addEventListener('connectionstatechange', () => { const local = this.localDescription?.sdp || '', remote = this.remoteDescription?.sdp || ''; window.__ssc_test_history.push({ connection: this.connectionState, ice: this.iceConnectionState, localRelay: (local.match(/ typ relay/g) || []).length, remoteRelay: (remote.match(/ typ relay/g) || []).length, localCandidates: (local.match(/a=candidate:/g) || []).length, remoteCandidates: (remote.match(/a=candidate:/g) || []).length }); }); this.addEventListener('datachannel', event => { const c = event.channel; window.__ssc_test_channels.push({ expectedLabel: c.label === 'ssc-v4', ordered: c.ordered, retries: c.maxRetransmits, lifetime: c.maxPacketLifeTime }); }); }
     };
   }, process.env.SSC_TEST_BROWSER_RELAY === '1');
   page = await context.newPage();
@@ -39,7 +39,7 @@ try {
   stage = 'chat';
   await until(async () => (await ipc(native, 'get_session_state')).phase === 'connected', 'native connected');
   if (process.env.SSC_TEST_DIRECT !== '1') await until(async () => (await ipc(native, 'get_session_state')).route === 'relay', 'native relay');
-  await page.getByLabel('Сообщение').fill('browser to native 🦀');
+  await page.getByLabel('Сообщение', { exact: true }).fill('browser to native 🦀');
   await page.getByRole('button', { name: 'Отправить', exact: true }).click();
   await until(() => visible(native, 'browser to native 🦀'), 'native receives browser');
   await input(native, '[aria-label="Сообщение"]', 'native to browser 🦀');
@@ -47,8 +47,9 @@ try {
   await page.getByText('native to browser 🦀', { exact: true }).waitFor();
   stage = 'closure';
   await page.getByRole('button', { name: 'Выйти и завершить чат' }).click();
+  await page.getByRole('button', { name: 'Выйти и очистить', exact: true }).click();
   await until(async () => (await ipc(native, 'get_session_state')).phase === 'closed', 'native closes with browser');
-  console.log(`PASS native creator ↔ Chromium guest: shared v3, equal SAS, mandatory confirmation, ${process.env.SSC_TEST_DIRECT === '1' ? 'direct control' : 'forced relay'}, bidirectional Unicode and close`);
+  console.log(`PASS native creator ↔ Chromium guest: shared v4, equal SAS, mandatory confirmation, ${process.env.SSC_TEST_DIRECT === '1' ? 'direct control' : 'forced relay'}, bidirectional Unicode and close`);
 } catch {
   console.error(`FAIL native-browser stage=${stage}; sensitive data withheld`);
   if (native) try {

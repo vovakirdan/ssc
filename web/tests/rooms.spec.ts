@@ -1,54 +1,14 @@
-import { test, expect, type Browser, type BrowserContext, type Page } from '@playwright/test';
+import { test, expect, type BrowserContext } from '@playwright/test';
 
-async function peerContext(browser: Browser): Promise<BrowserContext> {
-  const context = await browser.newContext();
-  if (process.env.SSC_WEB_FORCE_RELAY === '1') await context.addInitScript(() => {
-    const peers: RTCPeerConnection[] = [];
-    const Native = window.RTCPeerConnection;
-    window.RTCPeerConnection = class extends Native {
-      constructor(configuration?: RTCConfiguration) { super({ ...configuration, iceTransportPolicy: 'relay' }); peers.push(this); }
-    };
-    Object.defineProperty(window, '__sscRelayStats', { value: async () => Promise.all(peers.map(async peer => {
-      const stats = await peer.getStats();
-      let pair: RTCStats | undefined;
-      stats.forEach(value => { if (value.type === 'transport' && value.selectedCandidatePairId) pair = stats.get(value.selectedCandidatePairId); });
-      if (!pair) stats.forEach(value => { if (value.type === 'candidate-pair' && value.nominated && value.state === 'succeeded') pair = value; });
-      const selected = pair as RTCStats & { localCandidateId?: string; remoteCandidateId?: string } | undefined;
-      return { ice: peer.iceConnectionState, local: selected?.localCandidateId ? stats.get(selected.localCandidateId)?.candidateType : null, remote: selected?.remoteCandidateId ? stats.get(selected.remoteCandidateId)?.candidateType : null };
-    })) });
-  });
-  return context;
-}
-
-async function openInvitation(page: Page, invitation: string) {
-  // Pass the bearer fragment inside the browser, never a Playwright navigation log.
-  await page.goto('/');
-  const loaded = page.waitForEvent('domcontentloaded');
-  await page.evaluate(value => { location.replace(value); }, invitation);
-  await loaded;
-  await expect(page.getByRole('button', { name: 'Войти', exact: true })).toBeVisible();
-}
-async function confirm(creator: Page, guest: Page) {
-  const a = creator.getByLabel('Код сверки'), b = guest.getByLabel('Код сверки');
-  await expect(a).toBeVisible(); await expect(b).toBeVisible();
-  const matched = (await a.textContent()) === (await b.textContent());
-  expect(matched, 'Both peers must have the same SAS').toBe(true);
-  await expect(creator.getByRole('button', { name: 'Коды совпадают', exact: true })).toBeDisabled();
-  await creator.getByRole('checkbox', { name: 'Я сверил(а) весь код с собеседником' }).check();
-  await creator.getByRole('button', { name: 'Коды совпадают', exact: true }).click();
-  await expect(creator.getByRole('heading', { name: 'Ожидаем подтверждения собеседника…' })).toBeVisible();
-  await expect(creator.getByLabel('Сообщение')).toHaveCount(0);
-  await guest.getByRole('checkbox', { name: 'Я сверил(а) весь код с собеседником' }).check();
-  await guest.getByRole('button', { name: 'Коды совпадают', exact: true }).click();
-  await expect(creator.getByLabel('Сообщение')).toBeEnabled(); await expect(guest.getByLabel('Сообщение')).toBeEnabled();
-}
+import { peerContext, openInvitation, confirm, trackOwnedRoom, leaveChat } from './helpers';
 
 test('preview does not claim; two browsers compare SAS, chat and erase on exit', async ({ browser }) => {
-  const contexts: BrowserContext[] = [];
+  const contexts: BrowserContext[] = []; const cleanups: (() => Promise<void>)[] = [];
   try {
     const creatorContext = await peerContext(browser), previewContext = await browser.newContext(), guestContext = await peerContext(browser);
     contexts.push(creatorContext, previewContext, guestContext);
     const creator = await creatorContext.newPage(), preview = await previewContext.newPage(), guest = await guestContext.newPage();
+    cleanups.push(trackOwnedRoom(creator));
     await creator.clock.install({ time: new Date() });
     await creator.goto('/');
     await creator.getByRole('button', { name: 'Создать чат', exact: true }).click();
@@ -68,10 +28,10 @@ test('preview does not claim; two browsers compare SAS, chat and erase on exit',
       });
       expect(relay, 'Actual selected candidate pair must use relay on both sides').toBe(true);
     }
-    await creator.getByLabel('Сообщение').fill('browser greeting 🦀');
+    await creator.getByLabel('Сообщение', { exact: true }).fill('browser greeting 🦀');
     await creator.getByRole('button', { name: 'Отправить', exact: true }).click();
     await expect(guest.getByText('browser greeting 🦀', { exact: true })).toBeVisible();
-    await guest.getByLabel('Сообщение').fill('browser reply 🦀');
+    await guest.getByLabel('Сообщение', { exact: true }).fill('browser reply 🦀');
     await guest.getByRole('button', { name: 'Отправить', exact: true }).click();
     await expect(creator.getByText('browser reply 🦀', { exact: true })).toBeVisible();
     for (const page of [creator, guest]) {
@@ -93,11 +53,11 @@ test('preview does not claim; two browsers compare SAS, chat and erase on exit',
     await expect(creator.getByRole('heading', { name: 'Защищённый чат' })).toBeVisible();
     expect(seconds(await countdown.textContent())).toBeLessThanOrEqual(beforeRollback);
     expect(seconds(await countdown.textContent())).toBeGreaterThan(beforeRollback - 10);
-    await creator.getByRole('button', { name: 'Выйти и завершить чат' }).click();
+    await leaveChat(creator);
     await expect(creator.getByRole('heading', { name: 'Чат завершён' })).toBeVisible();
     await expect(guest.getByRole('heading', { name: 'Чат завершён' })).toBeVisible();
     await expect(creator.getByLabel('Переписка')).toHaveCount(0); await expect(guest.getByLabel('Переписка')).toHaveCount(0);
-  } finally { for (const context of contexts) await context.close(); }
+  } finally { for (const cleanup of cleanups) await cleanup(); for (const context of contexts) await context.close(); }
 });
 
 test('mobile preview is readable and makes no room API claim', async ({ page }) => {
@@ -115,7 +75,7 @@ test('mobile preview is readable and makes no room API claim', async ({ page }) 
 
 
 test('the monotonic one-hour deadline clears both peers even if the wall clock rolls back', async ({ browser }) => {
-  const creatorContext = await peerContext(browser), guestContext = await peerContext(browser);
+  const creatorContext = await peerContext(browser), guestContext = await peerContext(browser); const cleanups: (() => Promise<void>)[] = [];
   try {
     const creator = await creatorContext.newPage(), guest = await guestContext.newPage();
     await creator.clock.install({ time: new Date() });
@@ -132,5 +92,5 @@ test('the monotonic one-hour deadline clears both peers even if the wall clock r
     await expect(guest.getByRole('heading', { name: 'Чат завершён' })).toBeVisible();
     await expect(creator.getByLabel('Переписка')).toHaveCount(0);
     await expect(guest.getByLabel('Переписка')).toHaveCount(0);
-  } finally { await creatorContext.close(); await guestContext.close(); }
+  } finally { for (const cleanup of cleanups) await cleanup(); await creatorContext.close(); await guestContext.close(); }
 });

@@ -116,10 +116,16 @@ pub fn dec_bundle(encoded: &str) -> Result<ConnectionBundle, AppError> {
 mod tests {
     use super::*;
     #[test]
-    fn native_adapter_reencodes_legacy_invitation_byte_for_byte() {
-        let original="v3:H4sIAAAAAAAE/6WOzQ5AMBCE32XPDou49MZriAOl1E+Llot4d0P6BrLJZna/ZGYuciTC8iQ4okORoLqRLUGvQXeqH/Q4zYux67Y7f5yg6qV58W/g4/YveNEI4/eGb8bMd0S6xU9aYzrptTUxqEfhOEkBJVRZ3Q9J1GFGwwAAAA==";
+    fn native_adapter_reencodes_current_compact_invitation_byte_for_byte() {
+        let original="v4:H4sIAAAAAAAE/6WOzQ5AMBCE32XPDou49MZriAOl1E+Llot4d0P6BrLJZna/ZGYuciTC8iQ4okORoLqRLUGvQXeqH/Q4zYux67Y7f5yg6qV58W/g4/YveNEI4/eGb8bMd0S6xU9aYzrptTUxqEfhOEkBJVRZ3Q9J1GFGwwAAAA==";
         let decoded = dec_bundle(original).unwrap();
         assert_eq!(decoded.sdp_payload.id, "connection1");
         assert_eq!(enc_bundle(&decoded).unwrap(), original);
+        assert_eq!(
+            dec_bundle(&original.replacen("v4:", "v3:", 1))
+                .unwrap_err()
+                .code,
+            "unsupported_version"
+        );
     }
 }

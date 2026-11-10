@@ -1,4 +1,4 @@
-use crate::{invitation, ProtocolError, Session};
+use crate::{decode_event, invitation, FileHasher as CoreFileHasher, ProtocolError, Session};
 use js_sys::{Array, Object, Reflect, Uint8Array};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
@@ -63,6 +63,17 @@ impl ProtocolSession {
             "message",
             &event.message.map(JsValue::from).unwrap_or(JsValue::NULL),
         )?;
+        let typed = event
+            .event
+            .as_ref()
+            .map(|event| {
+                let json = serde_json::to_string(event)
+                    .map_err(|_| js_sys::Error::new("invalid_event"))?;
+                js_sys::JSON::parse(&json)
+            })
+            .transpose()?
+            .unwrap_or(JsValue::NULL);
+        set(&object, "event", &typed)?;
         Ok(object.into())
     }
     pub fn sas(&self) -> Option<String> {
@@ -84,6 +95,13 @@ impl ProtocolSession {
         self.inner
             .send_text(text, input::<16>(message_id)?)
             .map(frames)
+            .map_err(js_error)
+    }
+    pub fn send_event(&mut self, json: &str) -> Result<Uint8Array, JsValue> {
+        let event = decode_event(json.as_bytes()).map_err(js_error)?;
+        self.inner
+            .send_event(event)
+            .map(|frame| Uint8Array::from(frame.as_slice()))
             .map_err(js_error)
     }
     pub fn close(&mut self) {
@@ -173,4 +191,32 @@ pub fn decode_invitation(encoded: &str) -> Result<JsValue, JsValue> {
     }
     set(&object, "ice_candidates", &candidates)?;
     Ok(object.into())
+}
+
+#[wasm_bindgen]
+pub struct FileHasher {
+    inner: CoreFileHasher,
+}
+#[wasm_bindgen]
+impl FileHasher {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Self {
+        Self {
+            inner: CoreFileHasher::new(),
+        }
+    }
+    pub fn update(&mut self, data: &[u8]) -> Result<(), JsValue> {
+        self.inner.update(data).map_err(js_error)
+    }
+    pub fn finish(&mut self) -> Result<String, JsValue> {
+        self.inner.finish().map_err(js_error)
+    }
+    pub fn abort(&mut self) {
+        self.inner.abort();
+    }
+}
+impl Default for FileHasher {
+    fn default() -> Self {
+        Self::new()
+    }
 }
